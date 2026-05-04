@@ -1,5 +1,5 @@
 # bot.py - PREDICTOR PRO BOT (4 MODOS + HACK CON ALTERNANCIA 3)
-# VERSIÓN DEFINITIVA - HEREDA DE STANDARDSTRATEGY PARA NORMALIZACIÓN CORRECTA
+# VERSIÓN DEFINITIVA - ESTRATEGIA HACK ROBUSTA Y AUTOCONTENIDA
 
 import json
 import os
@@ -343,17 +343,73 @@ class PeakBreakStrategy(StandardStrategy):
             self._make_prediction()
 
 # ==================== ESTRATEGIA 3: HACK + ALTERNANCIA 3 ====================
-# AHORA HEREDA DE StandardStrategy PARA USAR LA MISMA NORMALIZACIÓN
-class HackAlternancia3Strategy(StandardStrategy):
+# VERSIÓN ROBUSTA Y AUTOCONTENIDA
+class HackAlternancia3Strategy:
     def __init__(self, user_id: int):
-        super().__init__(user_id)
+        self.user_id = user_id
+        self.history_window = deque(maxlen=20)
+        self.pending_bet = None
+        self.active = True
         self.modo_alternancia = False
+        self.total_wins = 0
+        self.total_losses = 0
+        self.on_status = None
+        self.on_prediction = None
+        self.on_result = None
+    
+    def _convertir_color(self, color) -> str:
+        """Convierte CUALQUIER entrada a 'red' o 'blue' de forma robusta"""
+        if color is None:
+            return 'red'
+        
+        c = str(color).lower().strip()
+        
+        # Mapeo directo
+        if c in ['red', 'rojo', '🔴', '1', 'r']:
+            return 'red'
+        if c in ['blue', 'azul', '🔵', '2', 'b']:
+            return 'blue'
+        
+        # Manejar emojis extraños (⚫, 🟢, 🟡, etc.)
+        if '⚫' in c:
+            if len(self.history_window) > 0:
+                return list(self.history_window)[-1]
+            return 'red'
+        if '🟢' in c or 'verde' in c:
+            return 'red'
+        if '🟡' in c or 'amarillo' in c:
+            return 'blue'
+        
+        # Si es texto genérico
+        if 'r' in c or '1' in c:
+            return 'red'
+        if 'b' in c or '2' in c:
+            return 'blue'
+        
+        # Fallback: usar el último color conocido
+        if len(self.history_window) > 0:
+            return list(self.history_window)[-1]
+        return 'red'
     
     def _ultimos_3_son_alternancia(self):
         if len(self.history_window) < 3:
             return False
         ultimos_3 = list(self.history_window)[-3:]
         return ultimos_3[0] != ultimos_3[1] and ultimos_3[1] != ultimos_3[2]
+    
+    def _get_historial_str(self):
+        if len(self.history_window) == 0:
+            return ""
+        last_10 = list(self.history_window)[-10:] if len(self.history_window) >= 10 else list(self.history_window)
+        resultado = ""
+        for c in last_10:
+            if c == 'red':
+                resultado += "🔴"
+            elif c == 'blue':
+                resultado += "🔵"
+            else:
+                resultado += "❓"
+        return resultado
     
     def _update_status_display(self, current_color: str):
         color_emoji = "🔴" if current_color == 'red' else "🔵"
@@ -387,12 +443,12 @@ class HackAlternancia3Strategy(StandardStrategy):
         if self.on_prediction:
             self.on_prediction(f"🎯 HACK+ALT: {pred_emoji} ({modo_texto} - {accion})")
     
-    def process_color(self, color: str):
+    def process_color(self, color):
         if not self.active:
             return
         
-        # USA EL MISMO MÉTODO DE NORMALIZACIÓN QUE STANDARDSTRATEGY
-        color = self.normalizar_color(color)
+        # CONVERSIÓN ROBUSTA DEL COLOR
+        color = self._convertir_color(color)
         
         # Resolver apuesta pendiente
         if self.pending_bet is not None:
@@ -421,7 +477,7 @@ class HackAlternancia3Strategy(StandardStrategy):
         self.history_window.append(color)
         self._update_status_display(color)
         
-        # Detectar nueva alternancia (SOLO si no estamos ya en ella)
+        # Detectar nueva alternancia
         if not self.modo_alternancia:
             if self._ultimos_3_son_alternancia():
                 self.modo_alternancia = True
@@ -433,8 +489,11 @@ class HackAlternancia3Strategy(StandardStrategy):
         self._make_prediction()
     
     def reset(self):
-        super().reset()
+        self.history_window.clear()
+        self.pending_bet = None
         self.modo_alternancia = False
+        self.total_wins = 0
+        self.total_losses = 0
 
 # ==================== ESTRATEGIA 4: PEAK-GHOST ====================
 class PeakGhostStrategy(StandardStrategy):
@@ -637,6 +696,10 @@ class GlobalPolling:
     def _polling_loop(self):
         while self.running:
             try:
+                if time.time() - self.last_color_time > self.reconnect_timeout:
+                    self.last_processed_index = 0
+                    self.last_color_time = time.time()
+                
                 response = requests.post(self.api_url, headers=self.headers, timeout=10)
                 if response.ok:
                     data = response.json()
@@ -646,15 +709,27 @@ class GlobalPolling:
                             new_colors = all_colors[self.last_processed_index:]
                             self.last_processed_index = len(all_colors)
                             raw_color = str(new_colors[-1]).lower()
+                            
+                            # MAPEO ROBUSTO PARA CUALQUIER FORMATO
                             if raw_color in ['red', 'rojo', '🔴', '1', 'r']:
                                 last_color = 'red'
                             elif raw_color in ['blue', 'azul', '🔵', '2', 'b']:
                                 last_color = 'blue'
+                            elif '🟢' in raw_color or 'verde' in raw_color:
+                                last_color = 'red'
+                            elif '🟡' in raw_color or 'amarillo' in raw_color:
+                                last_color = 'blue'
+                            elif '⚫' in raw_color:
+                                # Mantener el último color conocido si es posible
+                                last_color = 'red'
                             else:
                                 try:
-                                    last_color = 'red' if int(raw_color) == 1 else 'blue'
+                                    color_int = int(raw_color)
+                                    last_color = 'red' if color_int == 1 else 'blue'
                                 except:
                                     last_color = 'red'
+                            
+                            self.last_color_time = time.time()
                             with self._lock:
                                 for strategy in self.user_strategies.values():
                                     if strategy.active:
@@ -1167,7 +1242,7 @@ class PredictionBot:
         print("  • PEAK-GHOST - Validación de patrones")
         print("=" * 50)
         print("✅ AUTO-BET FUNCIONANDO")
-        print("🔄 ALTERNANCIA FUNCIONANDO (hereda de StandardStrategy)")
+        print("🔄 ALTERNANCIA FUNCIONANDO (con conversión robusta de colores)")
         print("🖼️ IMAGEN WIN FUNCIONANDO")
         print("=" * 50)
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
