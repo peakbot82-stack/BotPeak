@@ -1,5 +1,5 @@
-# bot.py - PREDICTOR PRO BOT (4 MODOS COMPLETOS + HACK CON ALTERNANCIA 3)
-# VERSIÓN DEFINITIVA - COLORES CORREGIDOS Y ALTERNANCIA FUNCIONANDO
+# bot.py - PREDICTOR PRO BOT (4 MODOS + HACK CON ALTERNANCIA 3)
+# VERSIÓN DEFINITIVA - NORMALIZACIÓN DE COLORES UNIFICADA
 
 import json
 import os
@@ -179,8 +179,20 @@ class UserAccount:
             self.current_bet = new_bet
             return f"Agressive (x2+inicial): ${new_bet:.2f}"
 
+# ==================== ESTRATEGIA BASE CON NORMALIZACIÓN ====================
+class BaseStrategy:
+    """Clase base con el método de normalización de colores que usan todos los modos"""
+    @staticmethod
+    def normalizar_color(color: str) -> str:
+        c = str(color).lower().strip()
+        if c in ['red', 'rojo', '🔴', '1', 'r', 'red']:
+            return 'red'
+        if c in ['blue', 'azul', '🔵', '2', 'b', 'blue']:
+            return 'blue'
+        return 'red'
+
 # ==================== ESTRATEGIA 1: ESTÁNDAR MEJORADO ====================
-class StandardStrategy:
+class StandardStrategy(BaseStrategy):
     def __init__(self, user_id: int):
         self.user_id = user_id
         self.history_window = deque(maxlen=20)
@@ -244,6 +256,8 @@ class StandardStrategy:
     def process_color(self, color: str):
         if not self.active:
             return
+        
+        color = self.normalizar_color(color)
         
         if self.pending_bet is not None:
             is_win = (self.pending_bet == color)
@@ -324,6 +338,8 @@ class PeakBreakStrategy(StandardStrategy):
         if not self.active:
             return
         
+        color = self.normalizar_color(color)
+        
         if self.peak_active and self.pending_bet is not None:
             is_win = (self.pending_bet == color)
             
@@ -376,13 +392,13 @@ class PeakBreakStrategy(StandardStrategy):
             self._make_prediction()
 
 # ==================== ESTRATEGIA 3: HACK + ALTERNANCIA DE 3 ====================
-class HackAlternancia3Strategy:
+class HackAlternancia3Strategy(BaseStrategy):
     def __init__(self, user_id: int):
         self.user_id = user_id
         self.history_window = deque(maxlen=20)
         self.pending_bet = None
         self.active = True
-        self.modo_alternancia = False  # False = BASE (mismo), True = ALTERNANCIA (opuesto)
+        self.modo_alternancia = False
         
         self.total_wins = 0
         self.total_losses = 0
@@ -392,7 +408,6 @@ class HackAlternancia3Strategy:
         self.on_result = None
     
     def _ultimos_3_son_alternancia(self):
-        """Verifica si los últimos 3 resultados son alternancia pura"""
         if len(self.history_window) < 3:
             return False
         ultimos_3 = list(self.history_window)[-3:]
@@ -416,21 +431,18 @@ class HackAlternancia3Strategy:
             self.on_status(f"{color_emoji} {color_text}\n📜 Historial: {historial}\n{estado}")
     
     def _make_prediction(self):
-        """Genera señal según el modo actual"""
         if len(self.history_window) == 0:
             return
         
         ultimo = list(self.history_window)[-1]
         
         if self.modo_alternancia:
-            # MODO ALTERNANCIA: apostar al OPUESTO
             self.pending_bet = 'blue' if ultimo == 'red' else 'red'
-            modo_texto = "🔄 ALTERNANCIA"
+            modo_texto = "ALTERNANCIA"
             accion = f"opuesto a {'🔴' if ultimo == 'red' else '🔵'}"
         else:
-            # MODO BASE: apostar al MISMO
             self.pending_bet = ultimo
-            modo_texto = "🔵 BASE"
+            modo_texto = "BASE"
             accion = f"mismo {'🔴' if ultimo == 'red' else '🔵'}"
         
         pred_emoji = "🔴" if self.pending_bet == 'red' else "🔵"
@@ -441,7 +453,10 @@ class HackAlternancia3Strategy:
         if not self.active:
             return
         
-        # ========== RESOLVER APUESTA PENDIENTE ==========
+        # USAR EL MISMO MÉTODO DE NORMALIZACIÓN QUE LOS OTROS MODOS
+        color = self.normalizar_color(color)
+        
+        # Resolver apuesta pendiente
         if self.pending_bet is not None:
             is_win = (self.pending_bet == color)
             
@@ -453,7 +468,6 @@ class HackAlternancia3Strategy:
                     self.on_result(f"❌ LOSS", False)
                     self.total_losses += 1
                     
-                    # Si perdimos estando en modo ALTERNANCIA, volver a BASE
                     if self.modo_alternancia:
                         self.modo_alternancia = False
                         if self.on_status:
@@ -462,16 +476,14 @@ class HackAlternancia3Strategy:
             self.pending_bet = None
             self.history_window.append(color)
             self._update_status_display(color)
-            
-            # Generar siguiente señal inmediatamente
             self._make_prediction()
             return
         
-        # ========== AGREGAR COLOR AL HISTORIAL ==========
+        # Agregar color al historial
         self.history_window.append(color)
         self._update_status_display(color)
         
-        # ========== DETECTAR NUEVA ALTERNANCIA ==========
+        # Detectar nueva alternancia
         if not self.modo_alternancia:
             if self._ultimos_3_son_alternancia():
                 self.modo_alternancia = True
@@ -480,7 +492,6 @@ class HackAlternancia3Strategy:
                     patron = ''.join(['🔴' if c == 'red' else '🔵' for c in ultimos_3])
                     self.on_status(f"🔄 ¡ALTERNANCIA DETECTADA! ({patron}) - Cambiando a modo OPUESTO")
         
-        # ========== GENERAR NUEVA SEÑAL ==========
         self._make_prediction()
     
     def reset(self):
@@ -603,6 +614,8 @@ class PeakGhostStrategy(StandardStrategy):
         if not self.active:
             return
         
+        color = self.normalizar_color(color)
+        
         if self.pending_bet is not None:
             is_win = (self.pending_bet == color)
             
@@ -703,7 +716,6 @@ class GlobalPolling:
         self.last_color_time = time.time()
         self.api_url = "https://www.ff2016.vip/api/game/getchart?lang=es"
         self.headers = {
-            "token": "81c635fe-0f6e-4bff-aede-4a69d9c9ef2d",
             "Content-Type": "application/json"
         }
         self._lock = threading.Lock()
@@ -764,19 +776,18 @@ class GlobalPolling:
                             new_colors = all_colors[self.last_processed_index:]
                             self.last_processed_index = len(all_colors)
                             
-                            # CORRECCIÓN: Mapear el color correctamente
                             raw_color = str(new_colors[-1]).lower()
-                            if raw_color in ['red', 'rojo', 'r', '1', '🔴']:
+                            
+                            if raw_color in ['red', 'rojo', '🔴', '1', 'r']:
                                 last_color = 'red'
-                            elif raw_color in ['blue', 'azul', 'b', '2', '🔵']:
+                            elif raw_color in ['blue', 'azul', '🔵', '2', 'b']:
                                 last_color = 'blue'
                             else:
-                                # Intentar convertir a número
                                 try:
                                     color_int = int(raw_color)
                                     last_color = 'red' if color_int == 1 else 'blue'
                                 except:
-                                    last_color = 'red' if 'red' in raw_color or 'rojo' in raw_color else 'blue'
+                                    last_color = 'red'
                             
                             self.last_color_time = time.time()
                             with self._lock:
@@ -818,11 +829,11 @@ class PredictionBot:
             await self.application.bot.send_photo(
                 chat_id=user_id,
                 photo=WIN_IMAGE_URL,
-                caption="✅ ¡WIN WITH THE PEAK BOT!"
+                caption="✅ WIN WITH THE PEAK BOT"
             )
         except Exception as e:
             print(f"Error enviando imagen WIN a {user_id}: {e}")
-            await self._send_message(user_id, "✅ ¡WIN!")
+            await self._send_message(user_id, "✅ WIN")
     
     def _sync_send_win_image(self, user_id: int):
         asyncio.run_coroutine_threadsafe(self._send_win_image(user_id), self.loop)
@@ -1625,7 +1636,7 @@ class PredictionBot:
         print("🖼️ IMAGEN WIN: Una sola por victoria")
         print("✅ AUTO-BET: Funcionando en todos los modos")
         print("🔄 ALTERNANCIA 3: Detecta y cambia a opuesto correctamente")
-        print("🎨 COLORES CORREGIDOS: 🔴 y 🔵")
+        print("🎨 NORMALIZACIÓN DE COLORES UNIFICADA")
         print("=" * 50)
         
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
