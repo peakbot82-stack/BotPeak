@@ -1,5 +1,5 @@
 # bot.py - PREDICTOR PRO BOT (4 MODOS COMPLETOS + HACK CON ALTERNANCIA 3)
-# VERSIÓN DEFINITIVA - AUTO-BET FUNCIONANDO EN TODOS LOS MODOS
+# VERSIÓN DEFINITIVA - COLORES CORREGIDOS Y ALTERNANCIA FUNCIONANDO
 
 import json
 import os
@@ -20,7 +20,7 @@ ADMIN_IDS = [5541162744]
 ADMIN_GROUP_ID = -1002513713257
 MY_WALLET_BEP20 = "0x621917958C7ac81190e9f876C23D6B9914f31263"
 
-# IMAGEN DE WIN (URL directa de PostImage)
+# IMAGEN DE WIN
 WIN_IMAGE_URL = "https://i.postimg.cc/T2pH8v1q/1777831023149.png"
 
 # ==================== PLANES DE LICENCIA ====================
@@ -763,7 +763,21 @@ class GlobalPolling:
                         if len(all_colors) > self.last_processed_index:
                             new_colors = all_colors[self.last_processed_index:]
                             self.last_processed_index = len(all_colors)
-                            last_color = new_colors[-1].lower()
+                            
+                            # CORRECCIÓN: Mapear el color correctamente
+                            raw_color = str(new_colors[-1]).lower()
+                            if raw_color in ['red', 'rojo', 'r', '1', '🔴']:
+                                last_color = 'red'
+                            elif raw_color in ['blue', 'azul', 'b', '2', '🔵']:
+                                last_color = 'blue'
+                            else:
+                                # Intentar convertir a número
+                                try:
+                                    color_int = int(raw_color)
+                                    last_color = 'red' if color_int == 1 else 'blue'
+                                except:
+                                    last_color = 'red' if 'red' in raw_color or 'rojo' in raw_color else 'blue'
+                            
                             self.last_color_time = time.time()
                             with self._lock:
                                 for user_id, strategy in self.user_strategies.items():
@@ -800,7 +814,6 @@ class PredictionBot:
             asyncio.run_coroutine_threadsafe(self._send_message(user_id, text, parse_mode), self.loop)
     
     async def _send_win_image(self, user_id: int):
-        """Envía la imagen de WIN cuando hay acierto (SOLO UNA VEZ)"""
         try:
             await self.application.bot.send_photo(
                 chat_id=user_id,
@@ -812,11 +825,7 @@ class PredictionBot:
             await self._send_message(user_id, "✅ ¡WIN!")
     
     def _sync_send_win_image(self, user_id: int):
-        """Versión síncrona para llamar desde callbacks"""
-        asyncio.run_coroutine_threadsafe(
-            self._send_win_image(user_id),
-            self.loop
-        )
+        asyncio.run_coroutine_threadsafe(self._send_win_image(user_id), self.loop)
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -1059,7 +1068,6 @@ class PredictionBot:
             def on_prediction(msg):
                 self._sync_send_message(user_id, msg)
                 
-                # AUTO-BET: detectar color y apostar
                 if self.user_sessions.get(user_id, {}).get('auto_betting_active'):
                     color = None
                     if '🔴' in msg:
@@ -1614,9 +1622,10 @@ class PredictionBot:
         print("  • Martingala: x2")
         print("  • Agresivo: (x2) + apuesta inicial")
         print("=" * 50)
-        print("🖼️ IMAGEN WIN: Una sola por victoria (sin duplicados)")
+        print("🖼️ IMAGEN WIN: Una sola por victoria")
         print("✅ AUTO-BET: Funcionando en todos los modos")
         print("🔄 ALTERNANCIA 3: Detecta y cambia a opuesto correctamente")
+        print("🎨 COLORES CORREGIDOS: 🔴 y 🔵")
         print("=" * 50)
         
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
