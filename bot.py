@@ -1,5 +1,5 @@
 # bot.py - PREDICTOR PRO BOT (4 MODOS + HACK CON ALTERNANCIA 3)
-# VERSIÓN DEFINITIVA - TODOS LOS MODOS FUNCIONANDO
+# VERSIÓN DEFINITIVA - HEREDA DE STANDARDSTRATEGY PARA NORMALIZACIÓN CORRECTA
 
 import json
 import os
@@ -342,19 +342,12 @@ class PeakBreakStrategy(StandardStrategy):
         if self.peak_active and self.pending_bet is None:
             self._make_prediction()
 
-# ==================== ESTRATEGIA 3: HACK + ALTERNANCIA 3 (CORREGIDA) ====================
-class HackAlternancia3Strategy(BaseStrategy):
+# ==================== ESTRATEGIA 3: HACK + ALTERNANCIA 3 ====================
+# AHORA HEREDA DE StandardStrategy PARA USAR LA MISMA NORMALIZACIÓN
+class HackAlternancia3Strategy(StandardStrategy):
     def __init__(self, user_id: int):
-        self.user_id = user_id
-        self.history_window = deque(maxlen=20)
-        self.pending_bet = None
-        self.active = True
+        super().__init__(user_id)
         self.modo_alternancia = False
-        self.total_wins = 0
-        self.total_losses = 0
-        self.on_status = None
-        self.on_prediction = None
-        self.on_result = None
     
     def _ultimos_3_son_alternancia(self):
         if len(self.history_window) < 3:
@@ -362,25 +355,25 @@ class HackAlternancia3Strategy(BaseStrategy):
         ultimos_3 = list(self.history_window)[-3:]
         return ultimos_3[0] != ultimos_3[1] and ultimos_3[1] != ultimos_3[2]
     
-    def _get_historial_str(self):
-        last_10 = list(self.history_window)[-10:] if len(self.history_window) >= 10 else list(self.history_window)
-        return ''.join(['🔴' if c == 'red' else '🔵' for c in last_10])
-    
     def _update_status_display(self, current_color: str):
         color_emoji = "🔴" if current_color == 'red' else "🔵"
         color_text = "ROJO" if current_color == 'red' else "AZUL"
         historial = self._get_historial_str()
+        
         if self.modo_alternancia:
             estado = "🔄 MODO ALTERNANCIA (apostando al OPUESTO)"
         else:
             estado = "🔵 MODO BASE (apostando al MISMO)"
+        
         if self.on_status:
             self.on_status(f"{color_emoji} {color_text}\n📜 Historial: {historial}\n{estado}")
     
     def _make_prediction(self):
         if len(self.history_window) == 0:
             return
+        
         ultimo = list(self.history_window)[-1]
+        
         if self.modo_alternancia:
             self.pending_bet = 'blue' if ultimo == 'red' else 'red'
             modo_texto = "ALTERNANCIA"
@@ -389,6 +382,7 @@ class HackAlternancia3Strategy(BaseStrategy):
             self.pending_bet = ultimo
             modo_texto = "BASE"
             accion = f"mismo {'🔴' if ultimo == 'red' else '🔵'}"
+        
         pred_emoji = "🔴" if self.pending_bet == 'red' else "🔵"
         if self.on_prediction:
             self.on_prediction(f"🎯 HACK+ALT: {pred_emoji} ({modo_texto} - {accion})")
@@ -396,9 +390,14 @@ class HackAlternancia3Strategy(BaseStrategy):
     def process_color(self, color: str):
         if not self.active:
             return
+        
+        # USA EL MISMO MÉTODO DE NORMALIZACIÓN QUE STANDARDSTRATEGY
         color = self.normalizar_color(color)
+        
+        # Resolver apuesta pendiente
         if self.pending_bet is not None:
             is_win = (self.pending_bet == color)
+            
             if self.on_result:
                 if is_win:
                     self.on_result(f"✅ WIN", True)
@@ -406,31 +405,36 @@ class HackAlternancia3Strategy(BaseStrategy):
                 else:
                     self.on_result(f"❌ LOSS", False)
                     self.total_losses += 1
+                    
                     if self.modo_alternancia:
                         self.modo_alternancia = False
                         if self.on_status:
                             self.on_status("🔴 Alternancia rota - Volviendo a modo BASE")
+            
             self.pending_bet = None
             self.history_window.append(color)
             self._update_status_display(color)
             self._make_prediction()
             return
+        
+        # Agregar color al historial
         self.history_window.append(color)
         self._update_status_display(color)
-        if not self.modo_alternancia and self._ultimos_3_son_alternancia():
-            self.modo_alternancia = True
-            if self.on_status:
-                ultimos_3 = list(self.history_window)[-3:]
-                patron = ''.join(['🔴' if c == 'red' else '🔵' for c in ultimos_3])
-                self.on_status(f"🔄 ¡ALTERNANCIA DETECTADA! ({patron}) - Cambiando a modo OPUESTO")
+        
+        # Detectar nueva alternancia (SOLO si no estamos ya en ella)
+        if not self.modo_alternancia:
+            if self._ultimos_3_son_alternancia():
+                self.modo_alternancia = True
+                if self.on_status:
+                    ultimos_3 = list(self.history_window)[-3:]
+                    patron = ''.join(['🔴' if c == 'red' else '🔵' for c in ultimos_3])
+                    self.on_status(f"🔄 ¡ALTERNANCIA DETECTADA! ({patron}) - Cambiando a modo OPUESTO")
+        
         self._make_prediction()
     
     def reset(self):
-        self.history_window.clear()
-        self.pending_bet = None
+        super().reset()
         self.modo_alternancia = False
-        self.total_wins = 0
-        self.total_losses = 0
 
 # ==================== ESTRATEGIA 4: PEAK-GHOST ====================
 class PeakGhostStrategy(StandardStrategy):
@@ -1156,14 +1160,14 @@ class PredictionBot:
         print("=" * 50)
         print("🤖 PREDICTOR PRO BOT INICIADO - VERSIÓN DEFINITIVA")
         print("=" * 50)
-        print("📊 4 MODOS DE ESTRATEGIA FUNCIONANDO")
+        print("📊 4 MODOS DE ESTRATEGIA:")
         print("  • ESTÁNDAR MEJORADO - Minoría últimos 5")
         print("  • PEAK-BREAK - Entrar después de 2 LOSS")
         print("  • PEAK HACK - BASE: mismo | Alternancia 3: opuesto")
         print("  • PEAK-GHOST - Validación de patrones")
         print("=" * 50)
         print("✅ AUTO-BET FUNCIONANDO")
-        print("🔄 ALTERNANCIA FUNCIONANDO")
+        print("🔄 ALTERNANCIA FUNCIONANDO (hereda de StandardStrategy)")
         print("🖼️ IMAGEN WIN FUNCIONANDO")
         print("=" * 50)
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
