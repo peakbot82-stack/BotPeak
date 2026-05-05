@@ -1,5 +1,5 @@
 # bot.py - PREDICTOR PRO BOT (4 MODOS + HACK CON ALTERNANCIA 3)
-# VERSIÓN DEFINITIVA - HACK HEREDA DE STANDARDSTRATEGY
+# VERSIÓN DEFINITIVA - ESTRATEGIA HACK: BASE (mismo) + ALTERNANCIA 3 (opuesto)
 
 import json
 import os
@@ -190,7 +190,7 @@ class BaseStrategy:
             return 'blue'
         return 'red'
 
-# ==================== ESTRATEGIA 1: ESTÁNDAR MEJORADO ====================
+# ==================== ESTRATEGIA 1: ESTÁNDAR MEJORADO (original) ====================
 class StandardStrategy(BaseStrategy):
     def __init__(self, user_id: int):
         self.user_id = user_id
@@ -280,7 +280,7 @@ class StandardStrategy(BaseStrategy):
         self.total_wins = 0
         self.total_losses = 0
 
-# ==================== ESTRATEGIA 2: PEAK-BREAK ====================
+# ==================== ESTRATEGIA 2: PEAK-BREAK (original) ====================
 class PeakBreakStrategy(StandardStrategy):
     def __init__(self, user_id: int):
         super().__init__(user_id)
@@ -342,24 +342,27 @@ class PeakBreakStrategy(StandardStrategy):
         if self.peak_active and self.pending_bet is None:
             self._make_prediction()
 
-# ==================== ESTRATEGIA 3: HACK + ALTERNANCIA 3 ====================
-# HEREDA DIRECTAMENTE DE StandardStrategy PARA USAR SU NORMALIZACIÓN
+# ==================== ESTRATEGIA 3: HACK + ALTERNANCIA 3 (NUEVA ESTRATEGIA) ====================
 class HackAlternancia3Strategy(StandardStrategy):
-    """Peak Hack: apostar al MISMO color, pero si detecta alternancia 3, cambia a OPUESTO hasta que rompa"""
+    """
+    Estrategia HACK mejorada:
+    - BASE: Apostar al MISMO color
+    - Si detecta alternancia en últimos 3 (🔴🔵🔴 o 🔵🔴🔵) → apostar al OPUESTO
+    - SIN PAUSAS post-LOSS (a diferencia del estándar)
+    """
     
     def __init__(self, user_id: int):
         super().__init__(user_id)
         self.modo_alternancia = False
     
     def _ultimos_3_son_alternancia(self):
-        """Verifica si los últimos 3 resultados son alternancia pura (ej: 🔴🔵🔴 o 🔵🔴🔵)"""
+        """Detecta patrón de alternancia pura (ej: 🔴🔵🔴 o 🔵🔴🔵)"""
         if len(self.history_window) < 3:
             return False
         ultimos_3 = list(self.history_window)[-3:]
         return ultimos_3[0] != ultimos_3[1] and ultimos_3[1] != ultimos_3[2]
     
     def _update_status_display(self, current_color: str):
-        """Muestra el estado actual en el chat"""
         color_emoji = "🔴" if current_color == 'red' else "🔵"
         color_text = "ROJO" if current_color == 'red' else "AZUL"
         historial = self._get_historial_str()
@@ -373,20 +376,22 @@ class HackAlternancia3Strategy(StandardStrategy):
             self.on_status(f"{color_emoji} {color_text}\n📜 Historial: {historial}\n{estado}")
     
     def _make_prediction(self):
-        """Genera la señal según el modo actual (BASE o ALTERNANCIA)"""
         if len(self.history_window) == 0:
             return
         
         ultimo = list(self.history_window)[-1]
         
-        if self.modo_alternancia:
-            # Modo ALTERNANCIA: apostar al OPUESTO del último color
+        # Verificar si hay ALTERNANCIA en los últimos 3
+        if self._ultimos_3_son_alternancia():
+            # ALTERNANCIA: apostar al OPUESTO
             self.pending_bet = 'blue' if ultimo == 'red' else 'red'
+            self.modo_alternancia = True
             modo_texto = "ALTERNANCIA"
             accion = f"opuesto a {'🔴' if ultimo == 'red' else '🔵'}"
         else:
-            # Modo BASE: apostar al MISMO color
+            # BASE: apostar al MISMO
             self.pending_bet = ultimo
+            self.modo_alternancia = False
             modo_texto = "BASE"
             accion = f"mismo {'🔴' if ultimo == 'red' else '🔵'}"
         
@@ -398,10 +403,10 @@ class HackAlternancia3Strategy(StandardStrategy):
         if not self.active:
             return
         
-        # NORMALIZAR COLOR (usa el método de StandardStrategy)
+        # Normalizar color (hereda de StandardStrategy)
         color = self.normalizar_color(color)
         
-        # ========== RESOLVER APUESTA PENDIENTE ==========
+        # Resolver apuesta pendiente
         if self.pending_bet is not None:
             is_win = (self.pending_bet == color)
             
@@ -412,44 +417,25 @@ class HackAlternancia3Strategy(StandardStrategy):
                 else:
                     self.on_result(f"❌ LOSS", False)
                     self.total_losses += 1
-                    
-                    # Si perdimos estando en modo ALTERNANCIA, volver a BASE
-                    if self.modo_alternancia:
-                        self.modo_alternancia = False
-                        if self.on_status:
-                            self.on_status("🔴 Alternancia rota - Volviendo a modo BASE")
             
             self.pending_bet = None
             self.history_window.append(color)
             self._update_status_display(color)
-            
-            # Generar siguiente señal inmediatamente (SIN PAUSA)
             self._make_prediction()
             return
         
-        # ========== AGREGAR COLOR AL HISTORIAL ==========
+        # Agregar color al historial
         self.history_window.append(color)
         self._update_status_display(color)
         
-        # ========== DETECTAR NUEVA ALTERNANCIA ==========
-        # Solo si NO estamos ya en modo alternancia
-        if not self.modo_alternancia:
-            if self._ultimos_3_son_alternancia():
-                self.modo_alternancia = True
-                if self.on_status:
-                    ultimos_3 = list(self.history_window)[-3:]
-                    patron = ''.join(['🔴' if c == 'red' else '🔵' for c in ultimos_3])
-                    self.on_status(f"🔄 ¡ALTERNANCIA DETECTADA! ({patron}) - Cambiando a modo OPUESTO")
-        
-        # ========== GENERAR NUEVA SEÑAL ==========
+        # Generar nueva predicción
         self._make_prediction()
     
     def reset(self):
-        """Reinicia la estrategia"""
         super().reset()
         self.modo_alternancia = False
 
-# ==================== ESTRATEGIA 4: PEAK-GHOST ====================
+# ==================== ESTRATEGIA 4: PEAK-GHOST (original) ====================
 class PeakGhostStrategy(StandardStrategy):
     def __init__(self, user_id: int):
         super().__init__(user_id)
@@ -1182,13 +1168,13 @@ class PredictionBot:
         print("🤖 PREDICTOR PRO BOT INICIADO - VERSIÓN DEFINITIVA")
         print("=" * 50)
         print("📊 4 MODOS DE ESTRATEGIA:")
-        print("  • ESTÁNDAR MEJORADO - Minoría últimos 5")
-        print("  • PEAK-BREAK - Entrar después de 2 LOSS")
-        print("  • PEAK HACK - BASE: mismo | Alternancia 3: opuesto")
+        print("  • ESTÁNDAR MEJORADO - Minoría últimos 5 (con pausa 1 ronda)")
+        print("  • PEAK-BREAK - Entrar después de 2 LOSS seguidos")
+        print("  • PEAK HACK - BASE: mismo color | Alternancia 3: opuesto (SIN PAUSAS)")
         print("  • PEAK-GHOST - Validación de patrones")
         print("=" * 50)
         print("✅ AUTO-BET FUNCIONANDO")
-        print("🔄 ALTERNANCIA FUNCIONANDO (Hack hereda de StandardStrategy)")
+        print("🔄 ALTERNANCIA FUNCIONANDO EN MODO HACK")
         print("🖼️ IMAGEN WIN FUNCIONANDO")
         print("=" * 50)
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
