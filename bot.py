@@ -1,5 +1,5 @@
 # bot.py - PREDICTOR PRO BOT (4 MODOS + HACK CON ALTERNANCIA 3)
-# VERSIÓN DEFINITIVA - ESTRATEGIA HACK: mismo color + alternancia 3
+# VERSIÓN DEFINITIVA - AUTO-BET FUNCIONANDO + SEÑAL HACK LIMPIA
 
 import json
 import os
@@ -187,11 +187,16 @@ class BaseStrategy:
         if color is None:
             return 'red'
         c = str(color).lower().strip()
+        
         if c in ['red', 'rojo', '🔴', '1', 'r']:
             return 'red'
         if c in ['blue', 'azul', '🔵', '2', 'b']:
             return 'blue'
-        # Si es círculo negro u otro, usar el último color conocido o red por defecto
+        
+        # Manejar emojis extraños (⚽, ⚫, etc.)
+        if '⚽' in c or '⚫' in c:
+            return 'red'
+        
         return 'red'
 
 # ==================== ESTRATEGIA 1: ESTÁNDAR MEJORADO ====================
@@ -351,7 +356,7 @@ class HackAlternancia3Strategy(StandardStrategy):
     """
     Estrategia HACK:
     - Normal: apostar al MISMO color
-    - Alternancia 3: apostar al OPUESTO (seguir la alternancia)
+    - Alternancia 3: apostar al OPUESTO
     """
     
     def __init__(self, user_id: int):
@@ -387,32 +392,23 @@ class HackAlternancia3Strategy(StandardStrategy):
         
         ultimo = list(self.history_window)[-1]
         
-        # Verificar si hay alternancia
         if self._ultimos_3_son_alternancia():
-            # Alternancia: apostar al OPUESTO
             self.pending_bet = 'blue' if ultimo == 'red' else 'red'
             self.modo_alternancia = True
-            modo_texto = "ALTERNANCIA"
-            accion = f"opuesto a {'🔴' if ultimo == 'red' else '🔵'}"
         else:
-            # Normal: apostar al MISMO
             self.pending_bet = ultimo
             self.modo_alternancia = False
-            modo_texto = "BASE"
-            accion = f"mismo {'🔴' if ultimo == 'red' else '🔵'}"
         
         pred_emoji = "🔴" if self.pending_bet == 'red' else "🔵"
         if self.on_prediction:
-            self.on_prediction(f"🎯 HACK+ALT: {pred_emoji} ({modo_texto} - {accion})")
+            self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
     
     def process_color(self, color: str):
         if not self.active:
             return
         
-        # Normalizar color
         color = self.normalizar_color(color)
         
-        # Resolver apuesta pendiente
         if self.pending_bet is not None:
             is_win = (self.pending_bet == color)
             
@@ -430,11 +426,8 @@ class HackAlternancia3Strategy(StandardStrategy):
             self._make_prediction()
             return
         
-        # Agregar color al historial
         self.history_window.append(color)
         self._update_status_display(color)
-        
-        # Generar nueva predicción
         self._make_prediction()
     
     def reset(self):
@@ -656,7 +649,6 @@ class GlobalPolling:
                             self.last_processed_index = len(all_colors)
                             raw_color = str(new_colors[-1]).lower()
                             
-                            # MAPEO ROBUSTO
                             if raw_color in ['red', 'rojo', '🔴', '1', 'r']:
                                 last_color = 'red'
                             elif raw_color in ['blue', 'azul', '🔵', '2', 'b']:
@@ -892,10 +884,6 @@ class PredictionBot:
                         color = 'red'
                     elif '🔵' in msg:
                         color = 'blue'
-                    elif 'ROJO' in msg.upper() or 'RED' in msg.upper():
-                        color = 'red'
-                    elif 'AZUL' in msg.upper() or 'BLUE' in msg.upper():
-                        color = 'blue'
                     if color:
                         self._execute_bets(user_id, color)
             
@@ -975,6 +963,15 @@ class PredictionBot:
     async def show_betting_config(self, update, user_id):
         session = self.user_sessions[user_id]
         config = session['bet_config']
+        strategy = session.get('strategy', 'standard')
+        
+        strategy_names = {
+            'standard': 'ESTÁNDAR MEJORADO',
+            'peakbreak': 'PEAK-BREAK',
+            'peakhack': 'PEAK HACK (Alternancia 3)',
+            'ghost': 'PEAK-GHOST'
+        }
+        
         keyboard = [
             [InlineKeyboardButton(f"💰 Inicial: ${config['initial_bet']}", callback_data='cfg_initial')],
             [InlineKeyboardButton(f"📈 Máximo: ${config['max_bet']}", callback_data='cfg_max_bet')],
@@ -984,8 +981,16 @@ class PredictionBot:
             [InlineKeyboardButton("▶️ INICIAR AUTO-BET", callback_data='start_autobet')],
             [InlineKeyboardButton("◀️ Volver", callback_data='back_to_start')]
         ]
-        msg = f"⚙️ CONFIGURACIÓN DE APUESTAS\n\n💰 Apuesta actual: ${config['current_bet']}\n🎲 Modo: {'Martingala (x2)' if config['use_martingale'] else 'Agresivo (x2+inicial)'}"
-        if hasattr(update, 'callback_query'):
+        
+        msg = (f"⚙️ CONFIGURACIÓN DE APUESTAS\n\n"
+               f"📊 Estrategia: {strategy_names.get(strategy, strategy.upper())}\n"
+               f"💰 Apuesta actual: ${config['current_bet']}\n"
+               f"🎲 Modo: {'Martingala (x2)' if config['use_martingale'] else 'Agresivo (x2+inicial)'}\n\n"
+               f"Ejemplo con $0.10 inicial:\n"
+               f"• Martingala: 0.10 → 0.20 → 0.40 → 0.80\n"
+               f"• Agresivo: 0.10 → 0.30 → 0.70 → 1.50")
+        
+        if hasattr(update, 'callback_query') and update.callback_query:
             await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
         else:
             await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1289,14 +1294,15 @@ class PredictionBot:
         print("🤖 PREDICTOR PRO BOT INICIADO - VERSIÓN DEFINITIVA")
         print("=" * 50)
         print("📊 4 MODOS DE ESTRATEGIA:")
-        print("  • ESTÁNDAR MEJORADO - Minoría últimos 5 (con pausa 1 ronda)")
-        print("  • PEAK-BREAK - Entrar después de 2 LOSS seguidos")
-        print("  • PEAK HACK - MISMO color | Si alternancia 3 → OPUESTO (SIN PAUSAS)")
+        print("  • ESTÁNDAR MEJORADO - Minoría últimos 5")
+        print("  • PEAK-BREAK - Entrar después de 2 LOSS")
+        print("  • PEAK HACK - MISMO color | Alternancia 3 → OPUESTO")
         print("  • PEAK-GHOST - Validación de patrones")
         print("=" * 50)
         print("✅ AUTO-BET FUNCIONANDO")
-        print("🔄 ALTERNANCIA 3 FUNCIONANDO EN MODO HACK")
+        print("🔄 ALTERNANCIA FUNCIONANDO")
         print("🖼️ IMAGEN WIN FUNCIONANDO")
+        print("🎯 SEÑAL HACK LIMPIA")
         print("=" * 50)
         
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
