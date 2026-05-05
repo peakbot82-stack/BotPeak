@@ -1,5 +1,5 @@
 # bot.py - PREDICTOR PRO BOT (4 MODOS + HACK CON ALTERNANCIA 3)
-# VERSIÓN DEFINITIVA - ESTRATEGIA HACK: BASE (mismo) + ALTERNANCIA 3 (opuesto)
+# VERSIÓN DEFINITIVA - ESTRATEGIA HACK: mismo color + alternancia 3
 
 import json
 import os
@@ -183,14 +183,18 @@ class UserAccount:
 class BaseStrategy:
     @staticmethod
     def normalizar_color(color: str) -> str:
+        """Convierte cualquier color a 'red' o 'blue'"""
+        if color is None:
+            return 'red'
         c = str(color).lower().strip()
         if c in ['red', 'rojo', '🔴', '1', 'r']:
             return 'red'
         if c in ['blue', 'azul', '🔵', '2', 'b']:
             return 'blue'
+        # Si es círculo negro u otro, usar el último color conocido o red por defecto
         return 'red'
 
-# ==================== ESTRATEGIA 1: ESTÁNDAR MEJORADO (original) ====================
+# ==================== ESTRATEGIA 1: ESTÁNDAR MEJORADO ====================
 class StandardStrategy(BaseStrategy):
     def __init__(self, user_id: int):
         self.user_id = user_id
@@ -280,7 +284,7 @@ class StandardStrategy(BaseStrategy):
         self.total_wins = 0
         self.total_losses = 0
 
-# ==================== ESTRATEGIA 2: PEAK-BREAK (original) ====================
+# ==================== ESTRATEGIA 2: PEAK-BREAK ====================
 class PeakBreakStrategy(StandardStrategy):
     def __init__(self, user_id: int):
         super().__init__(user_id)
@@ -342,13 +346,12 @@ class PeakBreakStrategy(StandardStrategy):
         if self.peak_active and self.pending_bet is None:
             self._make_prediction()
 
-# ==================== ESTRATEGIA 3: HACK + ALTERNANCIA 3 (NUEVA ESTRATEGIA) ====================
+# ==================== ESTRATEGIA 3: HACK + ALTERNANCIA 3 ====================
 class HackAlternancia3Strategy(StandardStrategy):
     """
-    Estrategia HACK mejorada:
-    - BASE: Apostar al MISMO color
-    - Si detecta alternancia en últimos 3 (🔴🔵🔴 o 🔵🔴🔵) → apostar al OPUESTO
-    - SIN PAUSAS post-LOSS (a diferencia del estándar)
+    Estrategia HACK:
+    - Normal: apostar al MISMO color
+    - Alternancia 3: apostar al OPUESTO (seguir la alternancia)
     """
     
     def __init__(self, user_id: int):
@@ -356,11 +359,14 @@ class HackAlternancia3Strategy(StandardStrategy):
         self.modo_alternancia = False
     
     def _ultimos_3_son_alternancia(self):
-        """Detecta patrón de alternancia pura (ej: 🔴🔵🔴 o 🔵🔴🔵)"""
         if len(self.history_window) < 3:
             return False
         ultimos_3 = list(self.history_window)[-3:]
         return ultimos_3[0] != ultimos_3[1] and ultimos_3[1] != ultimos_3[2]
+    
+    def _get_historial_str(self):
+        last_10 = list(self.history_window)[-10:] if len(self.history_window) >= 10 else list(self.history_window)
+        return ''.join(['🔴' if c == 'red' else '🔵' for c in last_10])
     
     def _update_status_display(self, current_color: str):
         color_emoji = "🔴" if current_color == 'red' else "🔵"
@@ -381,15 +387,15 @@ class HackAlternancia3Strategy(StandardStrategy):
         
         ultimo = list(self.history_window)[-1]
         
-        # Verificar si hay ALTERNANCIA en los últimos 3
+        # Verificar si hay alternancia
         if self._ultimos_3_son_alternancia():
-            # ALTERNANCIA: apostar al OPUESTO
+            # Alternancia: apostar al OPUESTO
             self.pending_bet = 'blue' if ultimo == 'red' else 'red'
             self.modo_alternancia = True
             modo_texto = "ALTERNANCIA"
             accion = f"opuesto a {'🔴' if ultimo == 'red' else '🔵'}"
         else:
-            # BASE: apostar al MISMO
+            # Normal: apostar al MISMO
             self.pending_bet = ultimo
             self.modo_alternancia = False
             modo_texto = "BASE"
@@ -403,7 +409,7 @@ class HackAlternancia3Strategy(StandardStrategy):
         if not self.active:
             return
         
-        # Normalizar color (hereda de StandardStrategy)
+        # Normalizar color
         color = self.normalizar_color(color)
         
         # Resolver apuesta pendiente
@@ -435,7 +441,7 @@ class HackAlternancia3Strategy(StandardStrategy):
         super().reset()
         self.modo_alternancia = False
 
-# ==================== ESTRATEGIA 4: PEAK-GHOST (original) ====================
+# ==================== ESTRATEGIA 4: PEAK-GHOST ====================
 class PeakGhostStrategy(StandardStrategy):
     def __init__(self, user_id: int):
         super().__init__(user_id)
@@ -683,11 +689,11 @@ class PredictionBot:
         asyncio.set_event_loop(self.loop)
     
     async def _send_message(self, user_id: int, text: str):
-        try:
-            if self.application:
+        if self.application:
+            try:
                 await self.application.bot.send_message(chat_id=user_id, text=text)
-        except Exception as e:
-            print(f"Error: {e}")
+            except Exception as e:
+                print(f"Error: {e}")
     
     def _sync_send_message(self, user_id: int, text: str):
         asyncio.run_coroutine_threadsafe(self._send_message(user_id, text), self.loop)
@@ -705,21 +711,44 @@ class PredictionBot:
         user_id = update.effective_user.id
         license_check = self.license_manager.check_license(user_id)
         if not license_check['valid']:
-            keyboard = [[InlineKeyboardButton("📅 Estándar 30d - 10 USDT", callback_data='plan_standard')],
-                       [InlineKeyboardButton("📊 Peak-Break 30d - 15 USDT", callback_data='plan_peakbreak')],
-                       [InlineKeyboardButton("🔧 Hack Alternancia 30d - 18 USDT", callback_data='plan_peakhack')],
-                       [InlineKeyboardButton("👻 Ghost 30d - 20 USDT", callback_data='plan_ghost')],
-                       [InlineKeyboardButton("👥 Multiuser 30d - 45 USDT", callback_data='plan_multiuser')]]
-            await update.message.reply_text("🔒 ACCESO RESTRINGIDO\n\nNo tienes licencia activa.\n💰 PLANES DISPONIBLES:\n• Estándar Mejorado 30d: 10 USDT\n• Peak-Break 30d: 15 USDT\n• Peak Hack Alternancia 30d: 18 USDT\n• Peak-Ghost 30d: 20 USDT\n• Multiuser 30d: 45 USDT\n\nSelecciona una opción:", reply_markup=InlineKeyboardMarkup(keyboard))
+            keyboard = [
+                [InlineKeyboardButton("📅 Estándar 30d - 10 USDT", callback_data='plan_standard')],
+                [InlineKeyboardButton("📊 Peak-Break 30d - 15 USDT", callback_data='plan_peakbreak')],
+                [InlineKeyboardButton("🔧 Hack Alternancia 30d - 18 USDT", callback_data='plan_peakhack')],
+                [InlineKeyboardButton("👻 Ghost 30d - 20 USDT", callback_data='plan_ghost')],
+                [InlineKeyboardButton("👥 Multiuser 30d - 45 USDT", callback_data='plan_multiuser')]
+            ]
+            await update.message.reply_text(
+                "🔒 ACCESO RESTRINGIDO\n\nNo tienes licencia activa.\n\n💰 PLANES DISPONIBLES:\n"
+                "• 📅 Estándar Mejorado 30d: 10 USDT\n"
+                "• 📊 Peak-Break 30d: 15 USDT\n"
+                "• 🔧 Peak Hack Alternancia 30d: 18 USDT\n"
+                "• 👻 Peak-Ghost 30d: 20 USDT\n"
+                "• 👥 Multiuser 30d: 45 USDT\n\n"
+                "Selecciona una opción:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
             return
+        
         license_data = license_check['data']
         plan_name = LICENSE_PLANS[license_data['plan']]['name']
         max_accounts = license_data.get('max_users', 1)
-        keyboard = [[InlineKeyboardButton("📡 MODO SEÑALES", callback_data='signals_mode')],
-                   [InlineKeyboardButton("🤖 MODO AUTOMATICO", callback_data='auto_mode')],
-                   [InlineKeyboardButton("📜 Info Licencia", callback_data='license_info')],
-                   [InlineKeyboardButton("💰 Comprar Licencia", callback_data='buy_license')]]
-        await update.message.reply_text(f"🎰 PREDICTOR PRO BOT\n\n✅ Licencia: {plan_name}\n👥 Máx cuentas: {max_accounts}\n\n📊 ESTRATEGIAS DISPONIBLES:\n• ESTÁNDAR MEJORADO: Minoría últimos 5\n• PEAK-BREAK: Entrar después de 2 LOSS\n• PEAK HACK: BASE→mismo, alternancia 3→opuesto\n• PEAK-GHOST: Validación de patrones\n\nSelecciona una opción:", reply_markup=InlineKeyboardMarkup(keyboard))
+        keyboard = [
+            [InlineKeyboardButton("📡 MODO SEÑALES", callback_data='signals_mode')],
+            [InlineKeyboardButton("🤖 MODO AUTOMATICO", callback_data='auto_mode')],
+            [InlineKeyboardButton("📜 Info Licencia", callback_data='license_info')],
+            [InlineKeyboardButton("💰 Comprar Licencia", callback_data='buy_license')]
+        ]
+        await update.message.reply_text(
+            f"🎰 PREDICTOR PRO BOT\n\n✅ Licencia: {plan_name}\n👥 Máx cuentas: {max_accounts}\n\n"
+            f"📊 ESTRATEGIAS DISPONIBLES:\n"
+            f"• ESTÁNDAR MEJORADO: Minoría últimos 5\n"
+            f"• PEAK-BREAK: Entrar después de 2 LOSS\n"
+            f"• PEAK HACK: MISMO color, si alternancia 3 → OPUESTO\n"
+            f"• PEAK-GHOST: Validación de patrones\n\n"
+            f"Selecciona una opción:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     
     async def signals_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -732,16 +761,33 @@ class PredictionBot:
         allowed_mode = license_check['data'].get('mode', 'standard')
         if not self.global_polling.running:
             self.global_polling.start()
-        def on_status(msg): self._sync_send_message(user_id, msg)
-        def on_prediction(msg): self._sync_send_message(user_id, msg)
+        
+        def on_status(msg):
+            self._sync_send_message(user_id, msg)
+        
+        def on_prediction(msg):
+            self._sync_send_message(user_id, msg)
+        
         def on_result(msg, is_win):
             self._sync_send_message(user_id, msg)
             if is_win:
                 self._sync_send_win_image(user_id)
+        
         strategy_type = allowed_mode if allowed_mode != "flexible" else "standard"
         self.global_polling.register_user(user_id, strategy_type, on_status, on_prediction, on_result)
         self.user_sessions[user_id] = {'mode': 'signals'}
-        await query.edit_message_text(f"📡 MODO SEÑALES ACTIVADO\n\nRecibirás las señales automáticamente.\nEn cada WIN recibirás imagen especial.\n\nUsa /stop para detener.")
+        
+        mode_names = {
+            'standard': 'ESTÁNDAR MEJORADO',
+            'peakbreak': 'PEAK-BREAK',
+            'peakhack': 'PEAK HACK (Alternancia 3)',
+            'ghost': 'PEAK-GHOST'
+        }
+        
+        await query.edit_message_text(
+            f"📡 MODO SEÑALES ACTIVADO\n\n📊 Estrategia: {mode_names.get(strategy_type, strategy_type.upper())}\n\n"
+            f"Recibirás las señales automáticamente.\nEn cada WIN recibirás imagen especial.\n\nUsa /stop para detener."
+        )
     
     async def auto_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -754,12 +800,19 @@ class PredictionBot:
         license_data = license_check['data']
         max_accounts = license_data.get('max_users', 1)
         allowed_mode = license_data.get('mode', 'standard')
+        
         if allowed_mode == "flexible":
-            await query.edit_message_text("🤖 MODO AUTOMATICO\n\n📊 SELECCIONA ESTRATEGIA:\n1️⃣ Estándar Mejorado\n2️⃣ Peak-Break\n3️⃣ Peak Hack (Alternancia 3)\n4️⃣ Peak-Ghost\n\nEnvía el número:")
+            await query.edit_message_text(
+                "🤖 MODO AUTOMATICO\n\n📊 SELECCIONA ESTRATEGIA:\n"
+                "1️⃣ Estándar Mejorado\n2️⃣ Peak-Break\n3️⃣ Peak Hack (Alternancia 3)\n4️⃣ Peak-Ghost\n\nEnvía el número:"
+            )
             context.user_data['awaiting_strategy_selection'] = True
             context.user_data['max_accounts'] = max_accounts
         else:
-            await query.edit_message_text(f"🤖 MODO AUTOMATICO\n\n📊 Estrategia asignada: {allowed_mode.upper()}\n\nEnvía tus credenciales:\nusuario:contraseña\n\nMáx {max_accounts} cuentas: user1:pass1,user2:pass2")
+            await query.edit_message_text(
+                f"🤖 MODO AUTOMATICO\n\n📊 Estrategia asignada: {allowed_mode.upper()}\n\n"
+                f"Envía tus credenciales:\nusuario:contraseña\n\nMáx {max_accounts} cuentas: user1:pass1,user2:pass2"
+            )
             context.user_data['awaiting_credentials'] = True
             context.user_data['max_accounts'] = max_accounts
             context.user_data['forced_strategy'] = allowed_mode
@@ -774,7 +827,18 @@ class PredictionBot:
         context.user_data['selected_strategy'] = strategy
         context.user_data['awaiting_strategy_selection'] = False
         context.user_data['awaiting_credentials'] = True
-        await update.message.reply_text(f"✅ Estrategia seleccionada\n\nEnvía tus credenciales:\nusuario:contraseña\n\nMáx {context.user_data.get('max_accounts', 1)} cuentas: user1:pass1,user2:pass2")
+        
+        mode_names = {
+            'standard': 'ESTÁNDAR MEJORADO',
+            'peakbreak': 'PEAK-BREAK',
+            'peakhack': 'PEAK HACK (Alternancia 3)',
+            'ghost': 'PEAK-GHOST'
+        }
+        
+        await update.message.reply_text(
+            f"✅ Estrategia seleccionada: {mode_names.get(strategy, strategy.upper())}\n\n"
+            f"Envía tus credenciales:\nusuario:contraseña\n\nMáx {context.user_data.get('max_accounts', 1)} cuentas: user1:pass1,user2:pass2"
+        )
     
     async def process_credentials(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -782,6 +846,7 @@ class PredictionBot:
         max_accounts = context.user_data.get('max_accounts', 1)
         strategy = context.user_data.get('selected_strategy', context.user_data.get('forced_strategy', 'standard'))
         accounts_data = []
+        
         if ',' in text:
             for part in text.split(','):
                 if ':' in part.strip():
@@ -794,10 +859,12 @@ class PredictionBot:
             await update.message.reply_text("❌ Formato incorrecto. Usa usuario:contraseña")
             context.user_data['awaiting_credentials'] = False
             return
+        
         if len(accounts_data) > max_accounts:
             await update.message.reply_text(f"❌ Máximo {max_accounts} cuentas")
             context.user_data['awaiting_credentials'] = False
             return
+        
         await update.message.reply_text(f"🔄 Probando {len(accounts_data)} cuenta(s)...")
         accounts = []
         for username, password in accounts_data:
@@ -808,11 +875,15 @@ class PredictionBot:
                 await update.message.reply_text(f"✅ {username}: ${acc.balance:.2f}")
             else:
                 await update.message.reply_text(f"❌ {username}: {msg}")
+        
         if accounts:
             await update.message.reply_text(f"✅ {len(accounts)} cuenta(s) conectada(s)")
             if not self.global_polling.running:
                 self.global_polling.start()
-            def on_status(msg): self._sync_send_message(user_id, msg)
+            
+            def on_status(msg):
+                self._sync_send_message(user_id, msg)
+            
             def on_prediction(msg):
                 self._sync_send_message(user_id, msg)
                 if self.user_sessions.get(user_id, {}).get('auto_betting_active'):
@@ -827,6 +898,7 @@ class PredictionBot:
                         color = 'blue'
                     if color:
                         self._execute_bets(user_id, color)
+            
             def on_result(msg, is_win):
                 self._sync_send_message(user_id, msg)
                 if is_win:
@@ -834,8 +906,21 @@ class PredictionBot:
                 if self.user_sessions.get(user_id, {}).get('auto_betting_active'):
                     self._update_bet_on_result(user_id, is_win)
                     self._show_balances(user_id)
+            
             self.global_polling.register_user(user_id, strategy, on_status, on_prediction, on_result)
-            self.user_sessions[user_id] = {'mode': 'auto', 'accounts': accounts, 'auto_betting_active': False, 'strategy': strategy, 'bet_config': {'initial_bet': 0.1, 'current_bet': 0.1, 'max_bet': 10.0, 'max_losses': 5, 'use_martingale': False}}
+            self.user_sessions[user_id] = {
+                'mode': 'auto',
+                'accounts': accounts,
+                'auto_betting_active': False,
+                'strategy': strategy,
+                'bet_config': {
+                    'initial_bet': 0.1,
+                    'current_bet': 0.1,
+                    'max_bet': 10.0,
+                    'max_losses': 5,
+                    'use_martingale': False,
+                }
+            }
             await self.show_betting_config(update, user_id)
         else:
             await update.message.reply_text("❌ No se pudo conectar ninguna cuenta")
@@ -890,13 +975,15 @@ class PredictionBot:
     async def show_betting_config(self, update, user_id):
         session = self.user_sessions[user_id]
         config = session['bet_config']
-        keyboard = [[InlineKeyboardButton(f"💰 Inicial: ${config['initial_bet']}", callback_data='cfg_initial')],
-                   [InlineKeyboardButton(f"📈 Máximo: ${config['max_bet']}", callback_data='cfg_max_bet')],
-                   [InlineKeyboardButton(f"🛑 Max Losses: {config['max_losses']}", callback_data='cfg_max_losses')],
-                   [InlineKeyboardButton(f"🎲 Modo: {'Martingala' if config['use_martingale'] else 'Agresivo'}", callback_data='cfg_mode')],
-                   [InlineKeyboardButton("📊 Ver Balances", callback_data='view_balances')],
-                   [InlineKeyboardButton("▶️ INICIAR AUTO-BET", callback_data='start_autobet')],
-                   [InlineKeyboardButton("◀️ Volver", callback_data='back_to_start')]]
+        keyboard = [
+            [InlineKeyboardButton(f"💰 Inicial: ${config['initial_bet']}", callback_data='cfg_initial')],
+            [InlineKeyboardButton(f"📈 Máximo: ${config['max_bet']}", callback_data='cfg_max_bet')],
+            [InlineKeyboardButton(f"🛑 Max Losses: {config['max_losses']}", callback_data='cfg_max_losses')],
+            [InlineKeyboardButton(f"🎲 Modo: {'Martingala' if config['use_martingale'] else 'Agresivo'}", callback_data='cfg_mode')],
+            [InlineKeyboardButton("📊 Ver Balances", callback_data='view_balances')],
+            [InlineKeyboardButton("▶️ INICIAR AUTO-BET", callback_data='start_autobet')],
+            [InlineKeyboardButton("◀️ Volver", callback_data='back_to_start')]
+        ]
         msg = f"⚙️ CONFIGURACIÓN DE APUESTAS\n\n💰 Apuesta actual: ${config['current_bet']}\n🎲 Modo: {'Martingala (x2)' if config['use_martingale'] else 'Agresivo (x2+inicial)'}"
         if hasattr(update, 'callback_query'):
             await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -993,7 +1080,10 @@ class PredictionBot:
             acc.betting_active = True
         self.user_sessions[user_id]['auto_betting_active'] = True
         modo_texto = "Martingala (x2)" if config['use_martingale'] else "Agresivo (x2+inicial)"
-        await update.callback_query.edit_message_text(f"✅ AUTO-BET ACTIVADO\n\n💰 Inicial: ${config['initial_bet']}\n📈 Máximo: ${config['max_bet']}\n🛑 Max Losses: {config['max_losses']}\n🎲 Modo: {modo_texto}\n\nUsa /stop para detener.")
+        await update.callback_query.edit_message_text(
+            f"✅ AUTO-BET ACTIVADO\n\n💰 Inicial: ${config['initial_bet']}\n📈 Máximo: ${config['max_bet']}\n"
+            f"🛑 Max Losses: {config['max_losses']}\n🎲 Modo: {modo_texto}\n\nUsa /stop para detener."
+        )
     
     async def view_balances(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -1008,11 +1098,13 @@ class PredictionBot:
         await update.callback_query.edit_message_text(msg)
     
     async def buy_license(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        keyboard = [[InlineKeyboardButton("📅 Estándar 30d - 10 USDT", callback_data='plan_standard')],
-                   [InlineKeyboardButton("📊 Peak-Break 30d - 15 USDT", callback_data='plan_peakbreak')],
-                   [InlineKeyboardButton("🔧 Hack Alternancia 30d - 18 USDT", callback_data='plan_peakhack')],
-                   [InlineKeyboardButton("👻 Ghost 30d - 20 USDT", callback_data='plan_ghost')],
-                   [InlineKeyboardButton("👥 Multiuser 30d - 45 USDT", callback_data='plan_multiuser')]]
+        keyboard = [
+            [InlineKeyboardButton("📅 Estándar 30d - 10 USDT", callback_data='plan_standard')],
+            [InlineKeyboardButton("📊 Peak-Break 30d - 15 USDT", callback_data='plan_peakbreak')],
+            [InlineKeyboardButton("🔧 Hack Alternancia 30d - 18 USDT", callback_data='plan_peakhack')],
+            [InlineKeyboardButton("👻 Ghost 30d - 20 USDT", callback_data='plan_ghost')],
+            [InlineKeyboardButton("👥 Multiuser 30d - 45 USDT", callback_data='plan_multiuser')]
+        ]
         await update.callback_query.edit_message_text("💰 COMPRAR LICENCIA\n\nSelecciona un plan:", reply_markup=InlineKeyboardMarkup(keyboard))
     
     async def select_plan(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1024,9 +1116,22 @@ class PredictionBot:
         if not plan:
             await query.edit_message_text("❌ Plan inválido")
             return
-        self.pending_payments[user_id] = {'plan': plan_id, 'amount': plan['price'], 'username': update.effective_user.username or update.effective_user.first_name}
-        keyboard = [[InlineKeyboardButton("📸 Enviar Comprobante", callback_data='send_payment_proof')], [InlineKeyboardButton("◀️ Volver", callback_data='back_to_start')]]
-        await query.edit_message_text(f"💸 PAGO REQUERIDO\n\n📦 Plan: {plan['name']}\n💰 Monto: {plan['price']} USDT (BEP20)\n\n📤 Wallet:\n`{MY_WALLET_BEP20}`\n\n1️⃣ Transferir EXACTAMENTE {plan['price']} USDT\n2️⃣ Toca 📸 Enviar Comprobante\n3️⃣ Adjunta CAPTURA con TXID\n\n🆔 Tu ID: `{user_id}`", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        self.pending_payments[user_id] = {
+            'plan': plan_id,
+            'amount': plan['price'],
+            'username': update.effective_user.username or update.effective_user.first_name
+        }
+        keyboard = [
+            [InlineKeyboardButton("📸 Enviar Comprobante", callback_data='send_payment_proof')],
+            [InlineKeyboardButton("◀️ Volver", callback_data='back_to_start')]
+        ]
+        await query.edit_message_text(
+            f"💸 PAGO REQUERIDO\n\n📦 Plan: {plan['name']}\n💰 Monto: {plan['price']} USDT (BEP20)\n\n"
+            f"📤 Wallet:\n`{MY_WALLET_BEP20}`\n\n1️⃣ Transferir EXACTAMENTE {plan['price']} USDT\n"
+            f"2️⃣ Toca 📸 Enviar Comprobante\n3️⃣ Adjunta CAPTURA con TXID\n\n🆔 Tu ID: `{user_id}`",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
     
     async def send_payment_proof(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -1036,7 +1141,10 @@ class PredictionBot:
             await query.edit_message_text("❌ No hay compra pendiente")
             return
         plan_name = LICENSE_PLANS[self.pending_payments[user_id]['plan']]['name']
-        await query.edit_message_text(f"📸 ENVIA CAPTURA\n\n📦 Plan: {plan_name}\n💰 Monto: {self.pending_payments[user_id]['amount']} USDT\n\nAdjunta la imagen con el TXID visible")
+        await query.edit_message_text(
+            f"📸 ENVIA CAPTURA\n\n📦 Plan: {plan_name}\n💰 Monto: {self.pending_payments[user_id]['amount']} USDT\n\n"
+            f"Adjunta la imagen con el TXID visible"
+        )
         context.user_data['awaiting_payment_proof'] = True
     
     async def handle_payment_proof(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1054,7 +1162,10 @@ class PredictionBot:
             match = re.search(r'(0x[a-fA-F0-9]{64})', update.message.caption)
             if match:
                 txid = match.group(0)
-        admin_msg = f"🆕 NUEVO PAGO\n\n👤 @{username}\n🆔 {user_id}\n📦 {plan_name}\n💰 {amount} USDT\n📝 TXID: {txid}\n\n✅ /validar {user_id} {plan_info['plan']}"
+        admin_msg = (
+            f"🆕 NUEVO PAGO\n\n👤 @{username}\n🆔 {user_id}\n📦 {plan_name}\n💰 {amount} USDT\n"
+            f"📝 TXID: {txid}\n\n✅ /validar {user_id} {plan_info['plan']}"
+        )
         try:
             if update.message.photo:
                 photo = update.message.photo[-1]
@@ -1075,7 +1186,12 @@ class PredictionBot:
             data = license_check['data']
             expiry = datetime.fromisoformat(data['expiry'])
             days = (expiry - datetime.now()).days
-            await query.edit_message_text(f"📜 INFORMACIÓN DE LICENCIA\n\n📋 Plan: {LICENSE_PLANS[data['plan']]['name']}\n👥 Modo: {data.get('mode', 'standard').upper()}\n🔢 Máx cuentas: {data.get('max_users', 1)}\n📅 Activada: {datetime.fromisoformat(data['activated']).strftime('%Y-%m-%d')}\n⏰ Expira: {expiry.strftime('%Y-%m-%d')}\n📆 Días restantes: {days}")
+            await query.edit_message_text(
+                f"📜 INFORMACIÓN DE LICENCIA\n\n📋 Plan: {LICENSE_PLANS[data['plan']]['name']}\n"
+                f"👥 Modo: {data.get('mode', 'standard').upper()}\n🔢 Máx cuentas: {data.get('max_users', 1)}\n"
+                f"📅 Activada: {datetime.fromisoformat(data['activated']).strftime('%Y-%m-%d')}\n"
+                f"⏰ Expira: {expiry.strftime('%Y-%m-%d')}\n📆 Días restantes: {days}"
+            )
         else:
             await query.edit_message_text("❌ Sin licencia activa")
     
@@ -1108,7 +1224,11 @@ class PredictionBot:
             if self.license_manager.activate_license(target_user_id, plan):
                 plan_name = LICENSE_PLANS[plan]['name']
                 await update.message.reply_text(f"✅ Licencia '{plan_name}' activada para {target_user_id}")
-                await self._send_message(target_user_id, f"🎉 ¡LICENCIA ACTIVADA!\n\n📦 Plan: {plan_name}\n📊 Modo: {LICENSE_PLANS[plan]['mode'].upper()}\n👥 Máx cuentas: {LICENSE_PLANS[plan]['max_users']}\n\nUsa /start para comenzar")
+                await self._send_message(
+                    target_user_id,
+                    f"🎉 ¡LICENCIA ACTIVADA!\n\n📦 Plan: {plan_name}\n📊 Modo: {LICENSE_PLANS[plan]['mode'].upper()}\n"
+                    f"👥 Máx cuentas: {LICENSE_PLANS[plan]['max_users']}\n\nUsa /start para comenzar"
+                )
             else:
                 await update.message.reply_text("❌ Error al activar la licencia")
         except:
@@ -1164,19 +1284,21 @@ class PredictionBot:
         self.application.add_handler(CallbackQueryHandler(self.back_to_start, pattern='back_to_start'))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_messages))
         self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_any_photo))
+        
         print("=" * 50)
         print("🤖 PREDICTOR PRO BOT INICIADO - VERSIÓN DEFINITIVA")
         print("=" * 50)
         print("📊 4 MODOS DE ESTRATEGIA:")
         print("  • ESTÁNDAR MEJORADO - Minoría últimos 5 (con pausa 1 ronda)")
         print("  • PEAK-BREAK - Entrar después de 2 LOSS seguidos")
-        print("  • PEAK HACK - BASE: mismo color | Alternancia 3: opuesto (SIN PAUSAS)")
+        print("  • PEAK HACK - MISMO color | Si alternancia 3 → OPUESTO (SIN PAUSAS)")
         print("  • PEAK-GHOST - Validación de patrones")
         print("=" * 50)
         print("✅ AUTO-BET FUNCIONANDO")
-        print("🔄 ALTERNANCIA FUNCIONANDO EN MODO HACK")
+        print("🔄 ALTERNANCIA 3 FUNCIONANDO EN MODO HACK")
         print("🖼️ IMAGEN WIN FUNCIONANDO")
         print("=" * 50)
+        
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
