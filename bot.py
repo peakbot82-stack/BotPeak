@@ -1,5 +1,5 @@
-# bot.py - PREDICTOR PRO BOT (4 MODOS + HACK SIMPLIFICADO)
-# VERSIÓN DEFINITIVA - HACK: MISMO COLOR + ALTERNANCIA 3
+# bot.py - PREDICTOR PRO BOT (4 MODOS + HACK CON ESPERA POST-LOSS)
+# VERSIÓN DEFINITIVA - HACK: mismo color + alternancia 3 + espera WIN después de LOSS
 
 import json
 import os
@@ -354,18 +354,20 @@ class PeakBreakStrategy(StandardStrategy):
         if self.peak_active and self.pending_bet is None:
             self._make_prediction()
 
-# ==================== ESTRATEGIA 3: HACK SIMPLIFICADO ====================
+# ==================== ESTRATEGIA 3: HACK + ALTERNANCIA + ESPERA POST-LOSS ====================
 class HackAlternancia3Strategy(StandardStrategy):
     """
     ESTRATEGIA HACK DEFINITIVA:
     - BASE: apostar al MISMO color
     - Alternancia (🔴🔵🔴 o 🔵🔴🔵): activar modo y apostar OPUESTO
-    - SIN PATRONES, SIN DOBLE, SIN TRIPLE, SIN PAUSAS
+    - Después de LOSS: ESPERAR un WIN para volver a apostar
+    - SIN DOBLE, SIN TRIPLE, SIN PATRONES PELIGROSOS
     """
     
     def __init__(self, user_id: int):
         super().__init__(user_id)
         self.modo_alternancia = False
+        self.esperando_win_despues_loss = False
     
     def _ultimos_3_son_alternancia(self) -> bool:
         if len(self.history_window) < 3:
@@ -387,10 +389,20 @@ class HackAlternancia3Strategy(StandardStrategy):
         else:
             estado = "🔵 MODO BASE (apostando al MISMO)"
         
+        if self.esperando_win_despues_loss:
+            estado += " ⏳ ESPERANDO WIN DESPUÉS DE LOSS"
+        
         if self.on_status:
             self.on_status(f"{color_emoji} {color_text}\n📜 Historial: {historial}\n{estado}")
     
     def _make_prediction(self):
+        # Si estamos esperando un WIN después de un LOSS, NO generar señal
+        if self.esperando_win_despues_loss:
+            self.pending_bet = None
+            if self.on_prediction:
+                self.on_prediction(f"⏳ ESPERANDO WIN DESPUÉS DE LOSS...")
+            return
+        
         if len(self.history_window) == 0:
             return
         
@@ -433,15 +445,23 @@ class HackAlternancia3Strategy(StandardStrategy):
                 if is_win:
                     self.on_result(f"✅ WIN", True)
                     self.total_wins += 1
+                    # Si estábamos esperando WIN después de LOSS, ya podemos salir
+                    if self.esperando_win_despues_loss:
+                        self.esperando_win_despues_loss = False
+                        if self.on_status:
+                            self.on_status("✅ Espera terminada - Volviendo a apostar")
                 else:
                     self.on_result(f"❌ LOSS", False)
                     self.total_losses += 1
                     
-                    # Perder en alternancia → se rompe
+                    # PERDIMOS → activar espera de WIN
+                    self.esperando_win_despues_loss = True
+                    if self.on_status:
+                        self.on_status("⏸️ LOSS detectado - Esperando un WIN para volver a apostar")
+                    
+                    # Romper alternancia si estábamos en ella
                     if self.modo_alternancia:
                         self.modo_alternancia = False
-                        if self.on_status:
-                            self.on_status("🔴 Alternancia rota - Volviendo a modo BASE")
             
             self.pending_bet = None
             self.history_window.append(color)
@@ -453,12 +473,17 @@ class HackAlternancia3Strategy(StandardStrategy):
         self.history_window.append(color)
         self._update_status_display(color)
         
+        # Si estamos esperando WIN después de LOSS, no hacer predicción
+        if self.esperando_win_despues_loss:
+            return
+        
         # Generar nueva predicción
         self._make_prediction()
     
     def reset(self):
         super().reset()
         self.modo_alternancia = False
+        self.esperando_win_despues_loss = False
 
 # ==================== ESTRATEGIA 4: PEAK-GHOST ====================
 class PeakGhostStrategy(StandardStrategy):
@@ -762,7 +787,7 @@ class PredictionBot:
             f"📊 ESTRATEGIAS DISPONIBLES:\n"
             f"• ESTÁNDAR MEJORADO: Minoría últimos 5\n"
             f"• PEAK-BREAK: Entrar después de 2 LOSS\n"
-            f"• PEAK HACK: MISMO color | Alternancia 3 → OPUESTO\n"
+            f"• PEAK HACK: MISMO color | Alternancia 3 → OPUESTO | Espera WIN después de LOSS\n"
             f"• PEAK-GHOST: Validación de patrones\n\n"
             f"Selecciona una opción:",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -798,7 +823,7 @@ class PredictionBot:
         mode_names = {
             'standard': 'ESTÁNDAR MEJORADO',
             'peakbreak': 'PEAK-BREAK',
-            'peakhack': 'PEAK HACK (Alternancia)',
+            'peakhack': 'PEAK HACK (Alternancia + Espera)',
             'ghost': 'PEAK-GHOST'
         }
         
@@ -822,7 +847,7 @@ class PredictionBot:
         if allowed_mode == "flexible":
             await query.edit_message_text(
                 "🤖 MODO AUTOMATICO\n\n📊 SELECCIONA ESTRATEGIA:\n"
-                "1️⃣ Estándar Mejorado\n2️⃣ Peak-Break\n3️⃣ Peak Hack (Alternancia)\n4️⃣ Peak-Ghost\n\nEnvía el número:"
+                "1️⃣ Estándar Mejorado\n2️⃣ Peak-Break\n3️⃣ Peak Hack (Alternancia + Espera)\n4️⃣ Peak-Ghost\n\nEnvía el número:"
             )
             context.user_data['awaiting_strategy_selection'] = True
             context.user_data['max_accounts'] = max_accounts
@@ -849,7 +874,7 @@ class PredictionBot:
         mode_names = {
             'standard': 'ESTÁNDAR MEJORADO',
             'peakbreak': 'PEAK-BREAK',
-            'peakhack': 'PEAK HACK (Alternancia)',
+            'peakhack': 'PEAK HACK (Alternancia + Espera)',
             'ghost': 'PEAK-GHOST'
         }
         
@@ -994,7 +1019,7 @@ class PredictionBot:
         strategy_names = {
             'standard': 'ESTÁNDAR MEJORADO',
             'peakbreak': 'PEAK-BREAK',
-            'peakhack': 'PEAK HACK (Alternancia)',
+            'peakhack': 'PEAK HACK (Alternancia + Espera)',
             'ghost': 'PEAK-GHOST'
         }
         
@@ -1322,12 +1347,13 @@ class PredictionBot:
         print("📊 4 MODOS DE ESTRATEGIA:")
         print("  • ESTÁNDAR MEJORADO - Minoría últimos 5")
         print("  • PEAK-BREAK - Entrar después de 2 LOSS")
-        print("  • PEAK HACK - MISMO color | Alternancia 3 → OPUESTO")
+        print("  • PEAK HACK - MISMO color | Alternancia 3 → OPUESTO | Espera WIN después de LOSS")
         print("  • PEAK-GHOST - Validación de patrones")
         print("=" * 50)
         print("✅ AUTO-BET FUNCIONANDO")
         print("🔄 ALTERNANCIA FUNCIONANDO")
         print("🖼️ IMAGEN WIN FUNCIONANDO")
+        print("⏸️ ESPERA POST-LOSS: después de cada pérdida, espera un WIN para volver a apostar")
         print("=" * 50)
         
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
