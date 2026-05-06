@@ -360,7 +360,7 @@ class HackAlternancia3Strategy(StandardStrategy):
     ESTRATEGIA HACK DEFINITIVA:
     - BASE: apostar al MISMO color
     - Alternancia (🔴🔵🔴 o 🔵🔴🔵): activar modo y apostar OPUESTO
-    - Después de LOSS: esperar un WIN para volver a apostar (actualizando historial y lógica mientras espera)
+    - Después de LOSS: esperar un WIN para volver a apostar (el WIN se detecta en el resultado del juego)
     - SIN DOBLE, SIN TRIPLE, SIN PATRONES PELIGROSOS
     """
     
@@ -394,6 +394,17 @@ class HackAlternancia3Strategy(StandardStrategy):
         
         if self.on_status:
             self.on_status(f"{color_emoji} {color_text}\n📜 Historial: {historial}\n{estado}")
+    
+    def _obtener_apuesta_teorica(self) -> str:
+        """Calcula qué color se habría apostado según la lógica actual (sin generar apuesta)"""
+        if len(self.history_window) == 0:
+            return 'red'
+        
+        ultimo = list(self.history_window)[-1]
+        if self.modo_alternancia:
+            return 'blue' if ultimo == 'red' else 'red'
+        else:
+            return ultimo
     
     def _make_prediction(self):
         """Genera señal (respeta espera post-LOSS)"""
@@ -460,11 +471,6 @@ class HackAlternancia3Strategy(StandardStrategy):
                 if is_win:
                     self.on_result(f"✅ WIN", True)
                     self.total_wins += 1
-                    # Si estábamos esperando WIN, ya podemos salir de la espera
-                    if self.esperando_win_despues_loss:
-                        self.esperando_win_despues_loss = False
-                        if self.on_status:
-                            self.on_status("✅ Espera terminada - Reanudando apuestas")
                 else:
                     self.on_result(f"❌ LOSS", False)
                     self.total_losses += 1
@@ -477,6 +483,15 @@ class HackAlternancia3Strategy(StandardStrategy):
                         self.modo_alternancia = False
             
             self.pending_bet = None
+        
+        # VERIFICAR SI DEBEMOS SALIR DE LA ESPERA (WIN detectado en el resultado)
+        if self.esperando_win_despues_loss:
+            # Calcular qué color se habría apostado
+            apuesta_teorica = self._obtener_apuesta_teorica()
+            if color == apuesta_teorica:
+                self.esperando_win_despues_loss = False
+                if self.on_status:
+                    self.on_status("✅ Espera terminada - Se detectó un WIN - Reanudando apuestas")
         
         # Generar siguiente predicción (respetará la espera si está activa)
         self._make_prediction()
@@ -1354,7 +1369,7 @@ class PredictionBot:
         print("✅ AUTO-BET FUNCIONANDO")
         print("🔄 ALTERNANCIA FUNCIONANDO")
         print("🖼️ IMAGEN WIN FUNCIONANDO")
-        print("⏸️ ESPERA POST-LOSS: después de cada pérdida, espera un WIN para volver a apostar")
+        print("⏸️ ESPERA POST-LOSS: detecta WIN en el resultado del juego para reanudar")
         print("=" * 50)
         
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
