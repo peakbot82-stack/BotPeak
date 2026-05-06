@@ -1,5 +1,5 @@
-# bot.py - PREDICTOR PRO BOT (4 MODOS + NUEVO HACK CON ALTERNANCIA)
-# VERSIÓN DEFINITIVA - ESTRATEGIA HACK COMPLETA
+# bot.py - PREDICTOR PRO BOT (4 MODOS + HACK SIMPLIFICADO)
+# VERSIÓN DEFINITIVA - HACK: MISMO COLOR + ALTERNANCIA 3
 
 import json
 import os
@@ -186,6 +186,7 @@ class BaseStrategy:
         """Convierte cualquier color a 'red' o 'blue'"""
         if color is None:
             return 'red'
+        
         c = str(color).lower().strip()
         
         if c in ['red', 'rojo', '🔴', '1', 'r']:
@@ -193,8 +194,8 @@ class BaseStrategy:
         if c in ['blue', 'azul', '🔵', '2', 'b']:
             return 'blue'
         
-        # Manejar emojis extraños
-        if '🟢' in c or '⚽' in c:
+        # Mapear emojis que puedan llegar
+        if '🟢' in c or '⚪' in c:
             return 'red'
         if '🟡' in c:
             return 'blue'
@@ -353,58 +354,24 @@ class PeakBreakStrategy(StandardStrategy):
         if self.peak_active and self.pending_bet is None:
             self._make_prediction()
 
-# ==================== ESTRATEGIA 3: NUEVO HACK + ALTERNANCIA ====================
+# ==================== ESTRATEGIA 3: HACK SIMPLIFICADO ====================
 class HackAlternancia3Strategy(StandardStrategy):
     """
     ESTRATEGIA HACK DEFINITIVA:
     - BASE: apostar al MISMO color
-    - DOBLE (🔴🔴 o 🔵🔵): apostar al OPUESTO
-    - TRIPLE (🔴🔴🔴 o 🔵🔵🔵): apostar al OPUESTO
-    - ALTERNANCIA (🔴🔵🔴 o 🔵🔴🔵): activar modo y apostar OPUESTO
-    - Patrón 🚫 NO APOSTAR: 🔴🔵🔵🔵🔵 o 🔵🔴🔴🔴🔴
-    - SIN PAUSAS
+    - Alternancia (🔴🔵🔴 o 🔵🔴🔵): activar modo y apostar OPUESTO
+    - SIN PATRONES, SIN DOBLE, SIN TRIPLE, SIN PAUSAS
     """
     
     def __init__(self, user_id: int):
         super().__init__(user_id)
         self.modo_alternancia = False
     
-    def _patron_no_apostar(self) -> bool:
-        """Detecta patrones donde NO se debe apostar"""
-        if len(self.history_window) < 5:
-            return False
-        
-        ultimos_5 = list(self.history_window)[-5:]
-        
-        # Patrón: 🔴🔵🔵🔵🔵
-        if ultimos_5 == ['red', 'blue', 'blue', 'blue', 'blue']:
-            return True
-        # Patrón: 🔵🔴🔴🔴🔴
-        if ultimos_5 == ['blue', 'red', 'red', 'red', 'red']:
-            return True
-        
-        return False
-    
     def _ultimos_3_son_alternancia(self) -> bool:
-        """Detecta alternancia pura en últimos 3"""
         if len(self.history_window) < 3:
             return False
         ultimos_3 = list(self.history_window)[-3:]
         return ultimos_3[0] != ultimos_3[1] and ultimos_3[1] != ultimos_3[2]
-    
-    def _hay_doble(self) -> bool:
-        """Detecta doble repetición en últimos 2"""
-        if len(self.history_window) < 2:
-            return False
-        ultimos_2 = list(self.history_window)[-2:]
-        return ultimos_2[0] == ultimos_2[1]
-    
-    def _hay_triple(self) -> bool:
-        """Detecta triple repetición en últimos 3"""
-        if len(self.history_window) < 3:
-            return False
-        ultimos_3 = list(self.history_window)[-3:]
-        return ultimos_3[0] == ultimos_3[1] == ultimos_3[2]
     
     def _get_historial_str(self):
         last_10 = list(self.history_window)[-10:] if len(self.history_window) >= 10 else list(self.history_window)
@@ -420,27 +387,16 @@ class HackAlternancia3Strategy(StandardStrategy):
         else:
             estado = "🔵 MODO BASE (apostando al MISMO)"
         
-        if self._patron_no_apostar():
-            estado += " ⚠️ PATRÓN DETECTADO - NO APOSTAR"
-        
         if self.on_status:
             self.on_status(f"{color_emoji} {color_text}\n📜 Historial: {historial}\n{estado}")
     
     def _make_prediction(self):
-        """Genera señal según la lógica completa"""
         if len(self.history_window) == 0:
-            return
-        
-        # REGLA 1: Patrón NO APOSTAR
-        if self._patron_no_apostar():
-            self.pending_bet = None
-            if self.on_prediction:
-                self.on_prediction(f"🚫 PATRÓN PELIGROSO - NO APOSTAR")
             return
         
         ultimo = list(self.history_window)[-1]
         
-        # REGLA 2: Modo ALTERNANCIA activo
+        # Modo ALTERNANCIA activo
         if self.modo_alternancia:
             self.pending_bet = 'blue' if ultimo == 'red' else 'red'
             if self.on_prediction:
@@ -448,23 +404,7 @@ class HackAlternancia3Strategy(StandardStrategy):
                 self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
             return
         
-        # REGLA 3: Triple repetición
-        if self._hay_triple():
-            self.pending_bet = 'blue' if ultimo == 'red' else 'red'
-            if self.on_prediction:
-                pred_emoji = "🔴" if self.pending_bet == 'red' else "🔵"
-                self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
-            return
-        
-        # REGLA 4: Doble repetición
-        if self._hay_doble():
-            self.pending_bet = 'blue' if ultimo == 'red' else 'red'
-            if self.on_prediction:
-                pred_emoji = "🔴" if self.pending_bet == 'red' else "🔵"
-                self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
-            return
-        
-        # REGLA 5: Alternancia detectada (activar modo)
+        # Alternancia detectada (activar modo)
         if self._ultimos_3_son_alternancia():
             self.modo_alternancia = True
             self.pending_bet = 'blue' if ultimo == 'red' else 'red'
@@ -473,7 +413,7 @@ class HackAlternancia3Strategy(StandardStrategy):
                 self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
             return
         
-        # REGLA 6: Modo BASE (apostar al MISMO)
+        # Modo BASE
         self.pending_bet = ultimo
         pred_emoji = "🔴" if self.pending_bet == 'red' else "🔵"
         if self.on_prediction:
@@ -497,7 +437,7 @@ class HackAlternancia3Strategy(StandardStrategy):
                     self.on_result(f"❌ LOSS", False)
                     self.total_losses += 1
                     
-                    # Si perdemos estando en alternancia, se rompe
+                    # Perder en alternancia → se rompe
                     if self.modo_alternancia:
                         self.modo_alternancia = False
                         if self.on_status:
@@ -822,7 +762,7 @@ class PredictionBot:
             f"📊 ESTRATEGIAS DISPONIBLES:\n"
             f"• ESTÁNDAR MEJORADO: Minoría últimos 5\n"
             f"• PEAK-BREAK: Entrar después de 2 LOSS\n"
-            f"• PEAK HACK: MISMO color | Doble/Triple/Alternancia → OPUESTO\n"
+            f"• PEAK HACK: MISMO color | Alternancia 3 → OPUESTO\n"
             f"• PEAK-GHOST: Validación de patrones\n\n"
             f"Selecciona una opción:",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -1382,13 +1322,12 @@ class PredictionBot:
         print("📊 4 MODOS DE ESTRATEGIA:")
         print("  • ESTÁNDAR MEJORADO - Minoría últimos 5")
         print("  • PEAK-BREAK - Entrar después de 2 LOSS")
-        print("  • PEAK HACK - MISMO color | Doble/Triple/Alternancia → OPUESTO")
+        print("  • PEAK HACK - MISMO color | Alternancia 3 → OPUESTO")
         print("  • PEAK-GHOST - Validación de patrones")
         print("=" * 50)
         print("✅ AUTO-BET FUNCIONANDO")
         print("🔄 ALTERNANCIA FUNCIONANDO")
         print("🖼️ IMAGEN WIN FUNCIONANDO")
-        print("🚫 PATRONES DE NO APOSTAR: 🔴🔵🔵🔵🔵 / 🔵🔴🔴🔴🔴")
         print("=" * 50)
         
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
