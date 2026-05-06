@@ -1,4 +1,4 @@
-# bot.py - PREDICTOR PRO BOT (4 MODOS + HACK CON ESPERA POST-LOSS)
+# bot.py - PREDICTOR PRO BOT (4 MODOS + HACK CON ESPERA POST-LOSS CORREGIDA)
 # VERSIÓN DEFINITIVA - HACK: mismo color + alternancia 3 + espera WIN después de LOSS
 
 import json
@@ -360,7 +360,7 @@ class HackAlternancia3Strategy(StandardStrategy):
     ESTRATEGIA HACK DEFINITIVA:
     - BASE: apostar al MISMO color
     - Alternancia (🔴🔵🔴 o 🔵🔴🔵): activar modo y apostar OPUESTO
-    - Después de LOSS: ESPERAR un WIN para volver a apostar
+    - Después de LOSS: esperar un WIN para volver a apostar (actualizando historial y lógica mientras espera)
     - SIN DOBLE, SIN TRIPLE, SIN PATRONES PELIGROSOS
     """
     
@@ -390,20 +390,21 @@ class HackAlternancia3Strategy(StandardStrategy):
             estado = "🔵 MODO BASE (apostando al MISMO)"
         
         if self.esperando_win_despues_loss:
-            estado += " ⏳ ESPERANDO WIN DESPUÉS DE LOSS"
+            estado += " ⏳ ESPERANDO WIN PARA REANUDAR APUESTAS"
         
         if self.on_status:
             self.on_status(f"{color_emoji} {color_text}\n📜 Historial: {historial}\n{estado}")
     
     def _make_prediction(self):
-        # Si estamos esperando un WIN después de un LOSS, NO generar señal
+        """Genera señal (respeta espera post-LOSS)"""
+        if len(self.history_window) == 0:
+            return
+        
+        # Si estamos esperando un WIN después de un LOSS, NO generar apuesta
         if self.esperando_win_despues_loss:
             self.pending_bet = None
             if self.on_prediction:
-                self.on_prediction(f"⏳ ESPERANDO WIN DESPUÉS DE LOSS...")
-            return
-        
-        if len(self.history_window) == 0:
+                self.on_prediction(f"⏳ ESPERANDO WIN PARA REANUDAR...")
             return
         
         ultimo = list(self.history_window)[-1]
@@ -437,7 +438,21 @@ class HackAlternancia3Strategy(StandardStrategy):
         
         color = self.normalizar_color(color)
         
-        # Resolver apuesta pendiente
+        # AGREGAR COLOR AL HISTORIAL SIEMPRE
+        self.history_window.append(color)
+        
+        # ACTUALIZAR LÓGICA DE ALTERNANCIA (siempre, aunque estemos esperando)
+        if not self.modo_alternancia:
+            if self._ultimos_3_son_alternancia():
+                self.modo_alternancia = True
+                if self.on_status:
+                    ultimos_3 = list(self.history_window)[-3:]
+                    patron = ''.join(['🔴' if c == 'red' else '🔵' for c in ultimos_3])
+                    self.on_status(f"🔄 ¡ALTERNANCIA DETECTADA! ({patron}) - Cambiando a modo OPUESTO")
+        
+        self._update_status_display(color)
+        
+        # RESOLVER APUESTA PENDIENTE (si hay)
         if self.pending_bet is not None:
             is_win = (self.pending_bet == color)
             
@@ -445,39 +460,25 @@ class HackAlternancia3Strategy(StandardStrategy):
                 if is_win:
                     self.on_result(f"✅ WIN", True)
                     self.total_wins += 1
-                    # Si estábamos esperando WIN después de LOSS, ya podemos salir
+                    # Si estábamos esperando WIN, ya podemos salir de la espera
                     if self.esperando_win_despues_loss:
                         self.esperando_win_despues_loss = False
                         if self.on_status:
-                            self.on_status("✅ Espera terminada - Volviendo a apostar")
+                            self.on_status("✅ Espera terminada - Reanudando apuestas")
                 else:
                     self.on_result(f"❌ LOSS", False)
                     self.total_losses += 1
-                    
                     # PERDIMOS → activar espera de WIN
                     self.esperando_win_despues_loss = True
                     if self.on_status:
-                        self.on_status("⏸️ LOSS detectado - Esperando un WIN para volver a apostar")
-                    
+                        self.on_status("⏸️ LOSS detectado - Esperando un WIN para reanudar apuestas")
                     # Romper alternancia si estábamos en ella
                     if self.modo_alternancia:
                         self.modo_alternancia = False
             
             self.pending_bet = None
-            self.history_window.append(color)
-            self._update_status_display(color)
-            self._make_prediction()
-            return
         
-        # Agregar color al historial
-        self.history_window.append(color)
-        self._update_status_display(color)
-        
-        # Si estamos esperando WIN después de LOSS, no hacer predicción
-        if self.esperando_win_despues_loss:
-            return
-        
-        # Generar nueva predicción
+        # Generar siguiente predicción (respetará la espera si está activa)
         self._make_prediction()
     
     def reset(self):
