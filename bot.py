@@ -1,5 +1,5 @@
-# bot.py - PREDICTOR PRO BOT (4 MODOS + HACK CON DOBLE Y ESPERA POST-LOSS)
-# VERSIÓN DEFINITIVA - HACK: mismo color + doble + alternancia 3 + espera WIN después de LOSS
+# bot.py - PREDICTOR PRO BOT (4 MODOS + HACK CON DOBLE, ALTERNANCIA Y ESPERA 1 RONDA)
+# VERSIÓN DEFINITIVA - HACK: doble/alternancia → opuesto | LOSS → espera 1 ronda
 
 import json
 import os
@@ -354,20 +354,21 @@ class PeakBreakStrategy(StandardStrategy):
         if self.peak_active and self.pending_bet is None:
             self._make_prediction()
 
-# ==================== ESTRATEGIA 3: HACK + DOBLE + ALTERNANCIA + ESPERA POST-LOSS ====================
+# ==================== ESTRATEGIA 3: HACK + DOBLE + ALTERNANCIA + ESPERA 1 RONDA ====================
 class HackAlternancia3Strategy(StandardStrategy):
     """
     ESTRATEGIA HACK DEFINITIVA:
     - DOBLE (🔴🔴 o 🔵🔵): apostar al OPUESTO
     - ALTERNANCIA (🔴🔵🔴 o 🔵🔴🔵): activar modo y apostar OPUESTO
     - BASE: apostar al MISMO color
-    - Después de LOSS: esperar un WIN para volver a apostar
+    - Después de LOSS: esperar 1 ronda (sin apostar) y luego reanudar
     """
     
     def __init__(self, user_id: int):
         super().__init__(user_id)
         self.modo_alternancia = False
-        self.esperando_win_despues_loss = False
+        self.esperando_post_loss = False
+        self.rondas_espera = 0
     
     def _ultimos_3_son_alternancia(self) -> bool:
         if len(self.history_window) < 3:
@@ -395,45 +396,27 @@ class HackAlternancia3Strategy(StandardStrategy):
         else:
             estado = "🔵 MODO BASE (apostando al MISMO)"
         
-        if self.esperando_win_despues_loss:
-            estado += " ⏳ ESPERANDO WIN PARA REANUDAR"
+        if self.esperando_post_loss:
+            estado += " ⏳ ESPERANDO 1 RONDA (LOSS detectado)"
         
         if self.on_status:
             self.on_status(f"{color_emoji} {color_text}\n📜 Historial: {historial}\n{estado}")
-    
-    def _obtener_apuesta_teorica(self) -> str:
-        """Calcula qué color se habría apostado según la lógica actual (sin generar apuesta)"""
-        if len(self.history_window) == 0:
-            return 'red'
-        
-        ultimo = list(self.history_window)[-1]
-        
-        # DOBLE
-        if self._hay_doble():
-            return 'blue' if ultimo == 'red' else 'red'
-        
-        # ALTERNANCIA
-        if self.modo_alternancia or self._ultimos_3_son_alternancia():
-            return 'blue' if ultimo == 'red' else 'red'
-        
-        # BASE
-        return ultimo
     
     def _make_prediction(self):
         """Genera señal según la lógica completa"""
         if len(self.history_window) == 0:
             return
         
-        # 1. ESPERA POST-LOSS
-        if self.esperando_win_despues_loss:
+        # Si estamos en espera post-loss, NO generar apuesta
+        if self.esperando_post_loss:
             self.pending_bet = None
             if self.on_prediction:
-                self.on_prediction(f"⏳ ESPERANDO WIN...")
+                self.on_prediction(f"⏳ ESPERANDO 1 RONDA...")
             return
         
         ultimo = list(self.history_window)[-1]
         
-        # 2. DOBLE repetición
+        # DOBLE repetición
         if self._hay_doble():
             self.pending_bet = 'blue' if ultimo == 'red' else 'red'
             if self.on_prediction:
@@ -441,7 +424,7 @@ class HackAlternancia3Strategy(StandardStrategy):
                 self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
             return
         
-        # 3. Modo ALTERNANCIA activo
+        # Modo ALTERNANCIA activo
         if self.modo_alternancia:
             self.pending_bet = 'blue' if ultimo == 'red' else 'red'
             if self.on_prediction:
@@ -449,7 +432,7 @@ class HackAlternancia3Strategy(StandardStrategy):
                 self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
             return
         
-        # 4. Alternancia detectada (activar modo)
+        # Alternancia detectada (activar modo)
         if self._ultimos_3_son_alternancia():
             self.modo_alternancia = True
             self.pending_bet = 'blue' if ultimo == 'red' else 'red'
@@ -458,7 +441,7 @@ class HackAlternancia3Strategy(StandardStrategy):
                 self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
             return
         
-        # 5. Modo BASE
+        # Modo BASE
         self.pending_bet = ultimo
         pred_emoji = "🔴" if self.pending_bet == 'red' else "🔵"
         if self.on_prediction:
@@ -484,7 +467,7 @@ class HackAlternancia3Strategy(StandardStrategy):
         
         self._update_status_display(color)
         
-        # RESOLVER APUESTA PENDIENTE (si hay)
+        # RESOLVER APUESTA PENDIENTE
         if self.pending_bet is not None:
             is_win = (self.pending_bet == color)
             
@@ -495,23 +478,27 @@ class HackAlternancia3Strategy(StandardStrategy):
                 else:
                     self.on_result(f"❌ LOSS", False)
                     self.total_losses += 1
-                    # PERDIMOS → activar espera de WIN
-                    self.esperando_win_despues_loss = True
+                    # ACTIVAR ESPERA DE 1 RONDA
+                    self.esperando_post_loss = True
+                    self.rondas_espera = 1
                     if self.on_status:
-                        self.on_status("⏸️ LOSS detectado - Esperando un WIN para reanudar")
+                        self.on_status("⏸️ LOSS detectado - Esperando 1 ronda para reanudar")
                     # Romper alternancia si estábamos en ella
                     if self.modo_alternancia:
                         self.modo_alternancia = False
             
             self.pending_bet = None
         
-        # VERIFICAR SI DEBEMOS SALIR DE LA ESPERA
-        if self.esperando_win_despues_loss:
-            apuesta_teorica = self._obtener_apuesta_teorica()
-            if color == apuesta_teorica:
-                self.esperando_win_despues_loss = False
+        # MANEJAR ESPERA POST-LOSS (1 ronda)
+        if self.esperando_post_loss:
+            self.rondas_espera -= 1
+            if self.rondas_espera <= 0:
+                self.esperando_post_loss = False
                 if self.on_status:
-                    self.on_status("✅ WIN detectado - Reanudando apuestas")
+                    self.on_status("✅ Espera terminada - Reanudando apuestas")
+            # No generar nueva predicción mientras esperamos
+            self._make_prediction()
+            return
         
         # Generar siguiente predicción
         self._make_prediction()
@@ -519,7 +506,8 @@ class HackAlternancia3Strategy(StandardStrategy):
     def reset(self):
         super().reset()
         self.modo_alternancia = False
-        self.esperando_win_despues_loss = False
+        self.esperando_post_loss = False
+        self.rondas_espera = 0
 
 # ==================== ESTRATEGIA 4: PEAK-GHOST ====================
 class PeakGhostStrategy(StandardStrategy):
@@ -823,7 +811,7 @@ class PredictionBot:
             f"📊 ESTRATEGIAS DISPONIBLES:\n"
             f"• ESTÁNDAR MEJORADO: Minoría últimos 5\n"
             f"• PEAK-BREAK: Entrar después de 2 LOSS\n"
-            f"• PEAK HACK: DOBLE/ALTERNANCIA → OPUESTO | Espera WIN después de LOSS\n"
+            f"• PEAK HACK: DOBLE/ALTERNANCIA → OPUESTO | LOSS → espera 1 ronda\n"
             f"• PEAK-GHOST: Validación de patrones\n\n"
             f"Selecciona una opción:",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -1383,13 +1371,13 @@ class PredictionBot:
         print("📊 4 MODOS DE ESTRATEGIA:")
         print("  • ESTÁNDAR MEJORADO - Minoría últimos 5")
         print("  • PEAK-BREAK - Entrar después de 2 LOSS")
-        print("  • PEAK HACK - DOBLE/ALTERNANCIA → OPUESTO | BASE → MISMO | Espera WIN después de LOSS")
+        print("  • PEAK HACK - DOBLE/ALTERNANCIA → OPUESTO | LOSS → espera 1 ronda")
         print("  • PEAK-GHOST - Validación de patrones")
         print("=" * 50)
         print("✅ AUTO-BET FUNCIONANDO")
         print("🔄 DOBLE Y ALTERNANCIA FUNCIONANDO")
         print("🖼️ IMAGEN WIN FUNCIONANDO")
-        print("⏸️ ESPERA POST-LOSS: detecta WIN en el resultado y reanuda")
+        print("⏸️ ESPERA POST-LOSS: 1 ronda sin apostar después de cada pérdida")
         print("=" * 50)
         
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
