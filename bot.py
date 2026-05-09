@@ -1,5 +1,5 @@
 # bot.py - PREDICTOR PRO BOT (4 MODOS + HACK DEFINITIVO)
-# VERSIÓN FINAL - Doble/Alternancia/Espera post-LOSS
+# VERSIÓN FINAL - Normalización corregida, doble/alternancia, espera post-LOSS
 
 import json
 import os
@@ -179,26 +179,31 @@ class UserAccount:
             self.current_bet = new_bet
             return f"Agressive (x2+inicial): ${new_bet:.2f}"
 
-# ==================== CLASE BASE CON NORMALIZACIÓN ====================
+# ==================== CLASE BASE CON NORMALIZACIÓN CORREGIDA ====================
 class BaseStrategy:
     @staticmethod
     def normalizar_color(color: str) -> str:
-        """Convierte cualquier color a 'red' o 'blue'"""
+        """Convierte CUALQUIER color a 'red' o 'blue'"""
         if color is None:
             return 'red'
         
         c = str(color).lower().strip()
         
+        # Mapeo directo
         if c in ['red', 'rojo', '🔴', '1', 'r']:
             return 'red'
         if c in ['blue', 'azul', '🔵', '2', 'b']:
             return 'blue'
         
-        # Mapear emojis que puedan llegar
-        if '🟢' in c or '⚪' in c or 'verde' in c:
+        # MAPEAR EMOJIS VERDES Y AMARILLOS (🟢 y 🟡)
+        if '🟢' in c or 'verde' in c or 'green' in c:
             return 'red'
-        if '🟡' in c or 'amarillo' in c:
+        if '🟡' in c or 'amarillo' in c or 'yellow' in c:
             return 'blue'
+        
+        # Cualquier otro emoji extraño (⚪, ⚫, etc.)
+        if '⚪' in c or '⚫' in c:
+            return 'red'
         
         return 'red'
 
@@ -361,7 +366,7 @@ class HackAlternancia3Strategy(StandardStrategy):
     - DOBLE (🔴🔴 o 🔵🔵): apostar al OPUESTO (una sola vez)
     - ALTERNANCIA (🔴🔵🔴 o 🔵🔴🔵): activar modo y apostar OPUESTO
     - BASE: apostar al MISMO color
-    - Después de LOSS: esperar un WIN para reanudar apuestas
+    - Después de LOSS: esperar un WIN para reanudar
     """
     
     def __init__(self, user_id: int):
@@ -381,8 +386,8 @@ class HackAlternancia3Strategy(StandardStrategy):
         ultimos_2 = list(self.history_window)[-2:]
         return ultimos_2[0] == ultimos_2[1]
     
-    def _obtener_apuesta_teorica(self) -> str:
-        """Calcula qué color se habría apostado según la lógica actual"""
+    def _obtener_senal_actual(self) -> str:
+        """Calcula la señal actual basada en el último color del historial"""
         if len(self.history_window) == 0:
             return 'red'
         
@@ -414,14 +419,18 @@ class HackAlternancia3Strategy(StandardStrategy):
             estado = "🔵 MODO BASE (apostando al MISMO)"
         
         if self.esperando_win_despues_loss:
-            estado += " ⏳ ESPERANDO WIN PARA REANUDAR APUESTAS"
+            estado += " ⏳ ESPERANDO WIN PARA REANUDAR"
         
         if self.on_status:
             self.on_status(f"{color_emoji} {color_text}\n📜 Historial: {historial}\n{estado}")
     
     def _make_prediction(self):
-        """Genera señal SIEMPRE (incluso en espera)"""
+        """Genera señal (solo si no estamos en espera)"""
         if len(self.history_window) == 0:
+            return
+        
+        # Si estamos en espera, no generar señal
+        if self.esperando_win_despues_loss:
             return
         
         ultimo = list(self.history_window)[-1]
@@ -463,10 +472,13 @@ class HackAlternancia3Strategy(StandardStrategy):
         
         color = self.normalizar_color(color)
         
-        # AGREGAR COLOR AL HISTORIAL SIEMPRE
+        # ========== 1. CALCULAR SEÑAL ACTUAL (para verificar WIN) ==========
+        senal_actual = self._obtener_senal_actual() if self.esperando_win_despues_loss else None
+        
+        # ========== 2. AGREGAR COLOR AL HISTORIAL ==========
         self.history_window.append(color)
         
-        # ACTUALIZAR LÓGICA DE ALTERNANCIA (siempre)
+        # ========== 3. ACTUALIZAR ALTERNANCIA ==========
         if not self.modo_alternancia:
             if self._ultimos_3_son_alternancia():
                 self.modo_alternancia = True
@@ -477,7 +489,7 @@ class HackAlternancia3Strategy(StandardStrategy):
         
         self._update_status_display(color)
         
-        # RESOLVER APUESTA PENDIENTE (solo si hay una apuesta activa)
+        # ========== 4. RESOLVER APUESTA PENDIENTE (de la ronda anterior) ==========
         if self.pending_bet is not None:
             is_win = (self.pending_bet == color)
             
@@ -503,16 +515,31 @@ class HackAlternancia3Strategy(StandardStrategy):
             
             self.pending_bet = None
         
-        # VERIFICAR SI DEBEMOS SALIR DE LA ESPERA (WIN detectado en el resultado)
-        # Esto cubre el caso cuando estamos esperando y ocurre un WIN sin haber apostado
+        # ========== 5. SI ESTAMOS EN ESPERA, VERIFICAR SI HAY WIN PARA APOSTAR AHORA ==========
         if self.esperando_win_despues_loss:
-            apuesta_teorica = self._obtener_apuesta_teorica()
-            if color == apuesta_teorica:
+            # Recalcular señal actual con el historial actualizado
+            senal_actual = self._obtener_senal_actual()
+            
+            # Verificar si la señal actual es WIN
+            if color == senal_actual:
+                # ¡ES UN WIN! Reanudamos y APOSTAMOS AHORA
                 self.esperando_win_despues_loss = False
+                self.pending_bet = senal_actual
                 if self.on_status:
-                    self.on_status("✅ WIN detectado - Reanudando apuestas")
+                    self.on_status("✅ WIN detectado - Reanudando y apostando ahora")
+                
+                # Mostrar señal
+                pred_emoji = "🔴" if senal_actual == 'red' else "🔵"
+                if self.on_prediction:
+                    self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
+                return
+            
+            # Si no hay WIN, mostrar mensaje de espera (solo si no hay apuesta pendiente)
+            if not self.pending_bet and self.on_prediction:
+                self.on_prediction(f"⏳ ESPERANDO WIN...")
+            return
         
-        # Generar siguiente predicción (SIEMPRE)
+        # ========== 6. GENERAR SIGUIENTE SEÑAL (solo si no estamos en espera) ==========
         self._make_prediction()
     
     def reset(self):
@@ -822,7 +849,7 @@ class PredictionBot:
             f"📊 ESTRATEGIAS DISPONIBLES:\n"
             f"• ESTÁNDAR MEJORADO: Minoría últimos 5\n"
             f"• PEAK-BREAK: Entrar después de 2 LOSS\n"
-            f"• PEAK HACK: DOBLE/ALTERNANCIA → OPUESTO | LOSS → espera WIN\n"
+            f"• PEAK HACK: DOBLE/ALTERNANCIA → OPUESTO | LOSS → espera WIN y apuesta inmediatamente\n"
             f"• PEAK-GHOST: Validación de patrones\n\n"
             f"Selecciona una opción:",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -1382,13 +1409,14 @@ class PredictionBot:
         print("📊 4 MODOS DE ESTRATEGIA:")
         print("  • ESTÁNDAR MEJORADO - Minoría últimos 5")
         print("  • PEAK-BREAK - Entrar después de 2 LOSS")
-        print("  • PEAK HACK - DOBLE/ALTERNANCIA → OPUESTO | LOSS → espera WIN")
+        print("  • PEAK HACK - DOBLE/ALTERNANCIA → OPUESTO | LOSS → espera WIN y apuesta inmediatamente")
         print("  • PEAK-GHOST - Validación de patrones")
         print("=" * 50)
         print("✅ AUTO-BET FUNCIONANDO")
         print("🔄 DOBLE Y ALTERNANCIA FUNCIONANDO")
         print("🖼️ IMAGEN WIN FUNCIONANDO")
-        print("⏸️ ESPERA POST-LOSS: espera un WIN para reanudar apuestas")
+        print("⏸️ ESPERA POST-LOSS: espera WIN y apuesta inmediatamente en esa ronda")
+        print("🎨 NORMALIZACIÓN DE COLORES CORREGIDA (🟢→🔴, 🟡→🔵)")
         print("=" * 50)
         
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
