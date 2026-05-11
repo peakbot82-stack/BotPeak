@@ -1,5 +1,6 @@
 # bot.py - PREDICTOR PRO BOT (4 MODOS: ESTÁNDAR, PEAK-BREAK, HACK, GHOST)
 # VERSIÓN DEFINITIVA - CON IMAGEN WIN Y ESTRATEGIAS COMPLETAS
+# ACTUALIZACIÓN: MODO HACK = MINORÍA últimos 5 + ESPERA WIN tras LOSS
 
 import json
 import os
@@ -228,8 +229,32 @@ class PeakBreakAccount(UserAccount):
             remaining = self.PEAKBREAK_THRESHOLD - self.peakbreak_consecutive_losses
             return f"⏳ Esperando {remaining} LOSS para activar"
 
-# ==================== CUENTA HACK ====================
+# ==================== CUENTA HACK (ACTUALIZADA) ====================
 class HackAccount(UserAccount):
+    def __init__(self, username, password):
+        super().__init__(username, password)
+        self.esperando_win = False
+    
+    def record_loss(self):
+        """Se llama cuando hay LOSS - Activamos espera"""
+        self.esperando_win = True
+        return True
+    
+    def record_win(self):
+        """Se llama cuando hay WIN - Desactivamos espera"""
+        self.esperando_win = False
+    
+    def should_bet(self) -> bool:
+        """Solo apostar si NO estamos esperando WIN"""
+        return not self.esperando_win
+    
+    def get_status(self) -> str:
+        if self.esperando_win:
+            return "⏳ Hack: Esperando WIN para reanudar"
+        return "🔧 Hack: Activo (minoría últimos 5)"
+
+# ==================== CUENTA GHOST ====================
+class GhostAccount(UserAccount):
     def __init__(self, username, password):
         super().__init__(username, password)
         self.esperando_win = False
@@ -246,8 +271,8 @@ class HackAccount(UserAccount):
     
     def get_status(self) -> str:
         if self.esperando_win:
-            return "⏳ ESPERANDO WIN PARA REANUDAR"
-        return "✅ ACTIVO (apostando)"
+            return "👻 ESPERANDO WIN PARA REANUDAR"
+        return "👻 ACTIVO (apostando)"
 
 # ==================== CLASE BASE CON NORMALIZACIÓN ====================
 class BaseStrategy:
@@ -437,25 +462,32 @@ class PeakBreakPredictor(StandardPredictor):
         self.peak_active = False
         self.loss_streak = 0
 
-# ==================== PREDICTOR HACK ====================
+# ==================== PREDICTOR HACK (MODIFICADO) ====================
 class HackPredictor:
     def __init__(self, user_id: int):
         self.user_id = user_id
         self.history_window = deque(maxlen=20)
         self.pending_bet = None
         self.active = True
-        self.modo_alternancia = False
+        self.esperando_win = False  # FLAG: esperar un WIN antes de seguir
         self.total_wins = 0
         self.total_losses = 0
         self.on_status = None
         self.on_prediction = None
         self.on_result = None
     
-    def _ultimos_3_son_alternancia(self) -> bool:
-        if len(self.history_window) < 3:
-            return False
-        ultimos_3 = list(self.history_window)[-3:]
-        return ultimos_3[0] != ultimos_3[1] and ultimos_3[1] != ultimos_3[2]
+    def _get_minority_color(self):
+        """Calcula el color minoritario en los últimos 5 resultados"""
+        if len(self.history_window) < 5:
+            return None
+        last_5 = list(self.history_window)[-5:]
+        red_count = last_5.count('red')
+        blue_count = last_5.count('blue')
+        if red_count < blue_count:
+            return 'red'
+        elif blue_count < red_count:
+            return 'blue'
+        return None
     
     def _get_historial_str(self):
         last_10 = list(self.history_window)[-10:] if len(self.history_window) >= 10 else list(self.history_window)
@@ -466,39 +498,31 @@ class HackPredictor:
         color_text = "ROJO" if current_color == 'red' else "AZUL"
         historial = self._get_historial_str()
         
-        if self.modo_alternancia:
-            estado = "🔄 MODO ALTERNANCIA (apostando al OPUESTO)"
+        if self.esperando_win:
+            estado = "⏳ ESPERANDO WIN PARA REANUDAR (LOSS detectado)"
+        elif len(self.history_window) < 5:
+            estado = f"📊 Recopilando datos ({len(self.history_window)}/5)..."
         else:
-            estado = "🔵 MODO BASE (apostando al MISMO)"
+            estado = "🎯 Modo HACK: Minoría últimos 5"
         
         if self.on_status:
             self.on_status(f"{color_emoji} {color_text}\n📜 Historial: {historial}\n{estado}")
     
     def _make_prediction(self):
-        if len(self.history_window) == 0:
+        """Genera señal basada en minoría de últimos 5"""
+        # Si estamos esperando WIN, NO generamos apuesta pendiente
+        if self.esperando_win:
             return
         
-        ultimo = list(self.history_window)[-1]
+        if len(self.history_window) < 5:
+            return
         
-        if self.modo_alternancia:
-            self.pending_bet = 'blue' if ultimo == 'red' else 'red'
+        prediction = self._get_minority_color()
+        if prediction:
+            self.pending_bet = prediction
+            pred_emoji = "🔴" if prediction == 'red' else "🔵"
             if self.on_prediction:
-                pred_emoji = "🔴" if self.pending_bet == 'red' else "🔵"
                 self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
-            return
-        
-        if self._ultimos_3_son_alternancia():
-            self.modo_alternancia = True
-            self.pending_bet = 'blue' if ultimo == 'red' else 'red'
-            if self.on_prediction:
-                pred_emoji = "🔴" if self.pending_bet == 'red' else "🔵"
-                self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
-            return
-        
-        self.pending_bet = ultimo
-        pred_emoji = "🔴" if self.pending_bet == 'red' else "🔵"
-        if self.on_prediction:
-            self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
     
     def process_color(self, color: str):
         if not self.active:
@@ -506,42 +530,44 @@ class HackPredictor:
         
         color = BaseStrategy.normalizar_color(color)
         
+        # VERIFICAR SI TENEMOS UNA APUESTA PENDIENTE QUE RESOLVER
         if self.pending_bet is not None:
             is_win = (self.pending_bet == color)
             
             if self.on_result:
                 if is_win:
-                    self.on_result(f"✅ WIN", True)
+                    self.on_result(f"✅ WIN - Continuando normal", True)
                     self.total_wins += 1
+                    # WIN: salimos del modo espera (si estábamos)
+                    self.esperando_win = False
                 else:
-                    self.on_result(f"❌ LOSS", False)
+                    self.on_result(f"❌ LOSS - Esperando un WIN para reanudar", False)
                     self.total_losses += 1
-                    if self.modo_alternancia:
-                        self.modo_alternancia = False
+                    # LOSS: activamos espera
+                    self.esperando_win = True
             
             self.pending_bet = None
             self.history_window.append(color)
             self._update_status_display(color)
-            self._make_prediction()
+            
+            # Si hubo WIN, generar siguiente predicción
+            if is_win:
+                self._make_prediction()
             return
         
+        # SI NO HAY APUESTA PENDIENTE, solo actualizar historial
         self.history_window.append(color)
         self._update_status_display(color)
         
-        if not self.modo_alternancia:
-            if self._ultimos_3_son_alternancia():
-                self.modo_alternancia = True
-                if self.on_status:
-                    ultimos_3 = list(self.history_window)[-3:]
-                    patron = ''.join(['🔴' if c == 'red' else '🔵' for c in ultimos_3])
-                    self.on_status(f"🔄 ¡ALTERNANCIA DETECTADA! ({patron}) - Cambiando a modo OPUESTO")
-        
-        self._make_prediction()
+        # Verificar si podemos generar nueva predicción
+        # Solo si NO estamos esperando WIN y tenemos suficientes datos
+        if not self.esperando_win and len(self.history_window) >= 5:
+            self._make_prediction()
     
     def reset(self):
         self.history_window.clear()
         self.pending_bet = None
-        self.modo_alternancia = False
+        self.esperando_win = False
         self.total_wins = 0
         self.total_losses = 0
 
@@ -793,27 +819,6 @@ class GlobalPolling:
                 print(f"Error en polling: {e}")
             time.sleep(2)
 
-# ==================== CUENTA GHOST ====================
-class GhostAccount(UserAccount):
-    def __init__(self, username, password):
-        super().__init__(username, password)
-        self.esperando_win = False
-    
-    def record_loss(self):
-        self.esperando_win = True
-        return True
-    
-    def record_win(self):
-        self.esperando_win = False
-    
-    def should_bet(self) -> bool:
-        return not self.esperando_win
-    
-    def get_status(self) -> str:
-        if self.esperando_win:
-            return "👻 ESPERANDO WIN PARA REANUDAR"
-        return "👻 ACTIVO (apostando)"
-
 # ==================== BOT DE TELEGRAM ====================
 class PredictionBot:
     def __init__(self, token: str):
@@ -861,7 +866,7 @@ class PredictionBot:
                 "🔒 ACCESO RESTRINGIDO\n\nNo tienes licencia activa.\n\n💰 PLANES DISPONIBLES:\n"
                 "• 📅 Estándar 30d: 10 USDT (minoría últimos 5)\n"
                 "• 📊 Peak-Break 30d: 15 USDT (entrar tras 2 LOSS)\n"
-                "• 🔧 Hack 30d: 18 USDT (BASE: mismo / Alternancia: opuesto)\n"
+                "• 🔧 Hack 30d: 18 USDT (minoría últimos 5 + espera WIN tras LOSS)\n"
                 "• 👻 Ghost 30d: 20 USDT (BASE + alternancia + espera WIN)\n"
                 "• 👥 Multiuser 30d: 45 USDT (hasta 5 cuentas)\n\n"
                 "Selecciona una opción:",
@@ -898,7 +903,7 @@ class PredictionBot:
             f"📊 ESTRATEGIAS DISPONIBLES:\n"
             f"• ESTÁNDAR: Minoría últimos 5, LOSS espera 1 ronda\n"
             f"• PEAK-BREAK: Entrar después de 2 LOSS seguidos\n"
-            f"• HACK: BASE→mismo color, alternancia 3→opuesto\n"
+            f"• HACK: Minoría últimos 5, LOSS espera WIN para reanudar\n"
             f"• GHOST: BASE→mismo, alternancia→opuesto, espera WIN después de LOSS\n\n"
             f"Selecciona una opción:",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -937,8 +942,8 @@ class PredictionBot:
         
         mode_names = {
             'standard': 'ESTÁNDAR (minoría últimos 5)',
-            'peakbreak': 'PEAK-BREAK',
-            'hack': 'HACK (BASE + alternancia)',
+            'peakbreak': 'PEAK-BREAK (entrar tras 2 LOSS)',
+            'hack': 'HACK (minoría últimos 5 + espera WIN tras LOSS)',
             'ghost': 'GHOST (BASE + alternancia + espera WIN)'
         }
         
@@ -965,9 +970,9 @@ class PredictionBot:
             await query.edit_message_text(
                 "🤖 MODO AUTOMATICO\n\n📊 SELECCIONA ESTRATEGIA:\n"
                 "1️⃣ Estándar (minoría últimos 5)\n"
-                "2️⃣ Peak-Break\n"
-                "3️⃣ Hack\n"
-                "4️⃣ Ghost\n\n"
+                "2️⃣ Peak-Break (entrar tras 2 LOSS)\n"
+                "3️⃣ Hack (minoría últimos 5 + espera WIN)\n"
+                "4️⃣ Ghost (BASE + alternancia + espera WIN)\n\n"
                 "Envía el número:"
             )
             context.user_data['awaiting_strategy_selection'] = True
@@ -993,10 +998,10 @@ class PredictionBot:
         context.user_data['awaiting_credentials'] = True
         
         mode_names = {
-            'standard': 'ESTÁNDAR',
-            'peakbreak': 'PEAK-BREAK',
-            'hack': 'HACK',
-            'ghost': 'GHOST'
+            'standard': 'ESTÁNDAR (minoría últimos 5)',
+            'peakbreak': 'PEAK-BREAK (entrar tras 2 LOSS)',
+            'hack': 'HACK (minoría últimos 5 + espera WIN)',
+            'ghost': 'GHOST (BASE + alternancia + espera WIN)'
         }
         
         await update.message.reply_text(
@@ -1104,11 +1109,6 @@ class PredictionBot:
         if not session:
             return
         
-        if strategy == "peakbreak":
-            for account in session.get('accounts', []):
-                if hasattr(account, 'decrement_wait'):
-                    account.decrement_wait()
-        
         for account in session.get('accounts', []):
             if strategy in ["peakbreak", "hack", "ghost"] and hasattr(account, 'should_bet'):
                 if not account.should_bet():
@@ -1210,10 +1210,10 @@ class PredictionBot:
         strategy = session.get('strategy', 'standard')
         
         strategy_names = {
-            'standard': 'ESTÁNDAR',
-            'peakbreak': 'PEAK-BREAK',
-            'hack': 'HACK',
-            'ghost': 'GHOST'
+            'standard': 'ESTÁNDAR (minoría últimos 5)',
+            'peakbreak': 'PEAK-BREAK (entrar tras 2 LOSS)',
+            'hack': 'HACK (minoría últimos 5 + espera WIN)',
+            'ghost': 'GHOST (BASE + alternancia + espera WIN)'
         }
         
         keyboard = [
@@ -1346,7 +1346,7 @@ class PredictionBot:
         strategy_names = {
             'standard': 'ESTÁNDAR (minoría últimos 5)',
             'peakbreak': 'PEAK-BREAK (entrar tras 2 LOSS)',
-            'hack': 'HACK (BASE: mismo color / Alternancia: opuesto)',
+            'hack': 'HACK (minoría últimos 5 + espera WIN tras LOSS)',
             'ghost': 'GHOST (BASE + alternancia + espera WIN)'
         }
         
@@ -1644,8 +1644,8 @@ class PredictionBot:
         print("📊 4 MODOS DE ESTRATEGIA:")
         print("  • ESTÁNDAR - Minoría últimos 5 (pausa 1 ronda)")
         print("  • PEAK-BREAK - Entrar después de 2 LOSS seguidos")
-        print("  • HACK - BASE: mismo color / Alternancia 3: opuesto")
-        print("  • GHOST - BASE: mismo color / Alternancia: opuesto / Espera WIN después de LOSS")
+        print("  • HACK - Minoría últimos 5 + esperar WIN tras LOSS")
+        print("  • GHOST - BASE: mismo color / Alternancia: opuesto / Espera WIN")
         print("=" * 50)
         print("💰 PLANES:")
         print("  • 📅 Estándar 30d: 10 USDT")
