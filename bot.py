@@ -1,6 +1,6 @@
 # bot.py - PREDICTOR PRO BOT (4 MODOS: ESTÁNDAR, PEAK-BREAK, HACK, GHOST)
 # VERSIÓN DEFINITIVA - CON IMAGEN WIN Y ESTRATEGIAS COMPLETAS
-# MODO HACK: Minoría últimos 5 + espera WIN con SEÑAL TEÓRICA
+# MODO HACK: Minoría últimos 5 + espera WIN con SEÑAL TEÓRICA (CORREGIDO)
 
 import json
 import os
@@ -459,14 +459,14 @@ class PeakBreakPredictor(StandardPredictor):
         self.peak_active = False
         self.loss_streak = 0
 
-# ==================== PREDICTOR HACK (CORREGIDO) ====================
+# ==================== PREDICTOR HACK (CORREGIDO - VERSIÓN FINAL) ====================
 class HackPredictor:
     def __init__(self, user_id: int):
         self.user_id = user_id
         self.history_window = deque(maxlen=20)
         self.pending_bet = None
         self.active = True
-        self.esperando_win = False  # FLAG: estamos esperando un WIN
+        self.esperando_win = False
         self.total_wins = 0
         self.total_losses = 0
         self.on_status = None
@@ -513,22 +513,25 @@ class HackPredictor:
         if self.on_status:
             self.on_status(f"{color_emoji} {color_text}\n📜 Historial: {historial}\n{estado}")
     
-    def _calcular_y_mostrar_senal_teorica(self):
-        """Calcula la señal teórica y la muestra, pero NO la guarda como apuesta si estamos en espera"""
+    def _mostrar_senal(self, prediction, es_teorica=False):
+        """Muestra la señal (normal o teórica)"""
+        if prediction is None:
+            return
+        pred_emoji = "🔴" if prediction == 'red' else "🔵"
+        if self.on_prediction:
+            if es_teorica:
+                self.on_prediction(f"🔍 SEÑAL TEÓRICA HACK (esperando WIN): {pred_emoji}")
+            else:
+                self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
+    
+    def _generar_y_mostrar_senal(self, es_teorica=False):
+        """Genera la señal basada en minoría y la muestra"""
         if len(self.history_window) < 5:
             return None
         
         prediction = self._get_minority_color()
         if prediction:
-            pred_emoji = "🔴" if prediction == 'red' else "🔵"
-            if self.esperando_win:
-                # Mostramos señal pero como "teórica" (solo info, no se apuesta)
-                if self.on_prediction:
-                    self.on_prediction(f"🔍 SEÑAL TEÓRICA HACK (esperando WIN): {pred_emoji}")
-            else:
-                # Modo normal: mostramos señal para apostar
-                if self.on_prediction:
-                    self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
+            self._mostrar_senal(prediction, es_teorica)
             return prediction
         return None
     
@@ -538,32 +541,34 @@ class HackPredictor:
         
         color = BaseStrategy.normalizar_color(color)
         
-        # ========== PRIMERO: Verificar si estamos esperando WIN ==========
+        # ========== CASO 1: Estamos esperando un WIN ==========
         if self.esperando_win:
-            # Calculamos cuál sería la señal teórica actual
-            senal_teorica = self._get_minority_color()
+            # Generamos y mostramos señal teórica
+            senal_teorica = self._generar_y_mostrar_senal(es_teorica=True)
             
-            # Si la señal teórica coincide con el color que salió → ¡ES UN WIN!
+            # Verificamos si el color que salió es el que esperábamos (WIN)
             if senal_teorica == color:
+                # ¡ES WIN! Reactivamos
                 self.esperando_win = False
                 if self.on_result:
                     self.on_result(f"✅ WIN DETECTADO - Reanudando apuestas", True)
                     self.total_wins += 1
-                # Actualizar historial
+                
+                # Actualizar historial con el color actual
                 self.history_window.append(color)
                 self._update_status_display(color)
-                # Generar siguiente señal (ahora sí para apostar)
-                self._make_prediction()
+                
+                # IMPORTANTE: Generar la siguiente señal PARA APOSTAR
+                senal = self._generar_y_mostrar_senal(es_teorica=False)
+                self.pending_bet = senal
                 return
             else:
-                # Aún no hay WIN, solo actualizar historial y mostrar
+                # Aún no hay WIN, solo actualizar historial
                 self.history_window.append(color)
                 self._update_status_display(color)
-                # Mostrar señal teórica (solo información)
-                self._calcular_y_mostrar_senal_teorica()
                 return
         
-        # ========== CASO NORMAL (no estamos esperando WIN) ==========
+        # ========== CASO 2: Modo normal (NO estamos esperando WIN) ==========
         
         # Si tenemos apuesta pendiente, resolverla
         if self.pending_bet is not None:
@@ -573,45 +578,32 @@ class HackPredictor:
                 if is_win:
                     self.on_result(f"✅ WIN - Continuando normal", True)
                     self.total_wins += 1
-                    # WIN: seguimos normal, no activamos espera
+                    # WIN: NO activamos espera, seguimos normal
                 else:
                     self.on_result(f"❌ LOSS - Esperando un WIN para reanudar", False)
                     self.total_losses += 1
                     # LOSS: activamos espera
                     self.esperando_win = True
             
-            self.pending_bet = None
+            # Actualizar historial
             self.history_window.append(color)
+            self.pending_bet = None
             self._update_status_display(color)
             
-            # Si fue WIN, generar siguiente señal
+            # Si fue WIN, generar siguiente señal inmediatamente
             if not self.esperando_win:
-                self._make_prediction()
+                senal = self._generar_y_mostrar_senal(es_teorica=False)
+                self.pending_bet = senal
             return
         
-        # No hay apuesta pendiente, actualizar historial
+        # No hay apuesta pendiente, solo actualizar historial y generar señal
         self.history_window.append(color)
         self._update_status_display(color)
         
-        # Mostrar señal teórica si estamos en modo normal
-        if not self.esperando_win:
-            self._calcular_y_mostrar_senal_teorica()
-        
-        # Generar nueva predicción si tenemos suficientes datos
-        if not self.esperando_win and len(self.history_window) >= 5:
-            self._make_prediction()
-    
-    def _make_prediction(self):
-        """Genera señal para APOSTAR (solo cuando NO estamos en espera)"""
-        if self.esperando_win:
-            return
-        
-        if len(self.history_window) < 5:
-            return
-        
-        prediction = self._get_minority_color()
-        if prediction:
-            self.pending_bet = prediction
+        # Generar nueva señal si tenemos suficientes datos
+        if len(self.history_window) >= 5 and not self.esperando_win:
+            senal = self._generar_y_mostrar_senal(es_teorica=False)
+            self.pending_bet = senal
     
     def reset(self):
         self.history_window.clear()
