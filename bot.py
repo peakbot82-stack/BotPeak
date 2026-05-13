@@ -1,6 +1,6 @@
-# bot.py - PREDICTOR PRO BOT (4 MODOS: ESTÁNDAR, PEAK-BREAK, HACK, GHOST)
-# VERSIÓN DEFINITIVA - CON IMAGEN WIN Y ESTRATEGIAS COMPLETAS
-# MODO HACK: Minoría últimos 5 + espera WIN con SEÑAL TEÓRICA (CORREGIDO)
+# bot.py - PREDICTOR PRO BOT (UN SOLO MODO: HACK)
+# VERSIÓN DEFINITIVA - ALTERNANCIA DE 3 + RUPTURA
+# SIN ESPERA DE WIN - APUESTA EN CADA RONDA
 
 import json
 import os
@@ -26,11 +26,8 @@ WIN_IMAGE_URL = "https://i.postimg.cc/T2pH8v1q/1777831023149.png"
 
 # ==================== PLANES DE LICENCIA ====================
 LICENSE_PLANS = {
-    "standard": {"price": 10, "days": 30, "mode": "standard", "max_users": 1, "name": "📅 Estándar 30 Días"},
-    "peakbreak": {"price": 15, "days": 30, "mode": "peakbreak", "max_users": 1, "name": "📊 Peak-Break 30 Días"},
     "hack": {"price": 18, "days": 30, "mode": "hack", "max_users": 1, "name": "🔧 Hack 30 Días"},
-    "ghost": {"price": 20, "days": 30, "mode": "ghost", "max_users": 1, "name": "👻 Ghost 30 Días"},
-    "multiuser": {"price": 45, "days": 30, "mode": "flexible", "max_users": 5, "name": "👥 Multiuser 30 Días"},
+    "multiuser": {"price": 45, "days": 30, "mode": "hack", "max_users": 5, "name": "👥 Multiuser 30 Días"},
 }
 
 # ==================== LICENCIA MANAGER ====================
@@ -180,101 +177,189 @@ class UserAccount:
             self.current_bet = new_bet
             return f"Agressive (x2+inicial): ${new_bet:.2f}"
 
-# ==================== CUENTA PEAK-BREAK ====================
-class PeakBreakAccount(UserAccount):
-    def __init__(self, username, password):
-        super().__init__(username, password)
-        self.peakbreak_consecutive_losses = 0
-        self.peakbreak_active = False
-        self.PEAKBREAK_THRESHOLD = 3
-        self.wait_rounds = 0
-    
-    def reset_peakbreak(self):
-        self.peakbreak_consecutive_losses = 0
-        self.peakbreak_active = False
-        self.wait_rounds = 0
-    
-    def record_loss(self):
-        self.wait_rounds = 1
-        
-        if not self.peakbreak_active:
-            self.peakbreak_consecutive_losses += 1
-            if self.peakbreak_consecutive_losses >= self.PEAKBREAK_THRESHOLD:
-                self.peakbreak_active = True
-                self.peakbreak_consecutive_losses = 0
-                self.betting_active = True
-                self.wait_rounds = 0
-            return False
-        else:
-            return True
-    
-    def record_win(self):
-        self.reset_peakbreak()
-    
-    def should_bet(self) -> bool:
-        if self.wait_rounds > 0:
-            return False
-        return self.peakbreak_active
-    
-    def decrement_wait(self):
-        if self.wait_rounds > 0:
-            self.wait_rounds -= 1
-    
-    def get_status(self) -> str:
-        if self.wait_rounds > 0:
-            return f"⏳ Esperando {self.wait_rounds} ronda(s)"
-        if self.peakbreak_active:
-            return "⚡ ACTIVO (apostando)"
-        else:
-            remaining = self.PEAKBREAK_THRESHOLD - self.peakbreak_consecutive_losses
-            return f"⏳ Esperando {remaining} LOSS para activar"
-
-# ==================== CUENTA HACK ====================
+# ==================== CUENTA HACK (SIN ESPERA) ====================
 class HackAccount(UserAccount):
     def __init__(self, username, password):
         super().__init__(username, password)
-        self.esperando_win = False
+        self.modo_alternancia = False  # True = apostar opuesto, False = apostar mismo
+        self.contador_ruptura = 0  # Para la apuesta única de ruptura
     
-    def record_loss(self):
-        self.esperando_win = True
-        return True
+    def reset_estrategia(self):
+        self.modo_alternancia = False
+        self.contador_ruptura = 0
     
-    def record_win(self):
-        self.esperando_win = False
-    
-    def should_bet(self) -> bool:
-        return not self.esperando_win
+    def procesar_historial(self, historial: deque) -> str:
+        """
+        Retorna el color a apostar basado en la lógica HACK:
+        - Normal: apostar al mismo color que salió
+        - Si últimos 3 son alternados: activar modo alternancia (apostar opuesto)
+        - Si hay ruptura (2 iguales): apostar contrario UNA VEZ y volver a normal
+        """
+        # Si estamos en modo ruptura (apuesta única)
+        if self.contador_ruptura > 0:
+            self.contador_ruptura -= 1
+            # Retornar el color contrario al último
+            ultimo = historial[-1] if historial else 'red'
+            resultado = 'blue' if ultimo == 'red' else 'red'
+            # Salir del modo ruptura después de esta apuesta
+            if self.contador_ruptura == 0:
+                self.modo_alternancia = False
+            return resultado
+        
+        # Verificar si hay 2 iguales consecutivos (RUPTURA)
+        if len(historial) >= 2:
+            ultimos_2 = list(historial)[-2:]
+            if ultimos_2[0] == ultimos_2[1]:
+                # ¡Ruptura detectada! Apuesta contraria UNA VEZ
+                self.contador_ruptura = 1
+                resultado = 'blue' if ultimos_2[0] == 'red' else 'red'
+                # Salimos del modo alternancia si estábamos en él
+                self.modo_alternancia = False
+                return resultado
+        
+        # Verificar si hay alternancia de 3
+        if len(historial) >= 3:
+            ultimos_3 = list(historial)[-3:]
+            if ultimos_3[0] != ultimos_3[1] and ultimos_3[1] != ultimos_3[2]:
+                # Activamos modo alternancia
+                self.modo_alternancia = True
+        
+        # Apostar según el modo actual
+        ultimo = historial[-1] if historial else 'red'
+        
+        if self.modo_alternancia:
+            # Modo alternancia: apostar al OPUESTO del último
+            return 'blue' if ultimo == 'red' else 'red'
+        else:
+            # Modo normal: apostar al MISMO que el último
+            return ultimo
     
     def get_status(self) -> str:
-        if self.esperando_win:
-            return "⏸️ Hack: Esperando WIN para reanudar"
-        return "🔧 Hack: Activo (minoría últimos 5)"
+        if self.contador_ruptura > 0:
+            return f"⚡ RUPTURA - Apuesta contraria (única)"
+        if self.modo_alternancia:
+            return "🔄 MODO ALTERNANCIA - Apostando al OPUESTO"
+        return "📊 MODO NORMAL - Apostando al MISMO color"
 
-# ==================== CUENTA GHOST ====================
-class GhostAccount(UserAccount):
-    def __init__(self, username, password):
-        super().__init__(username, password)
-        self.esperando_win = False
+# ==================== PREDICTOR HACK ====================
+class HackPredictor:
+    def __init__(self, user_id: int):
+        self.user_id = user_id
+        self.history_window = deque(maxlen=20)
+        self.pending_bet = None
+        self.active = True
+        self.total_wins = 0
+        self.total_losses = 0
+        self.on_status = None
+        self.on_prediction = None
+        self.on_result = None
     
-    def record_loss(self):
-        self.esperando_win = True
-        return True
+    def _get_historial_str(self):
+        last_10 = list(self.history_window)[-10:] if len(self.history_window) >= 10 else list(self.history_window)
+        return ''.join(['🔴' if c == 'red' else '🔵' for c in last_10])
     
-    def record_win(self):
-        self.esperando_win = False
+    def _get_ultimos_3_str(self):
+        if len(self.history_window) < 3:
+            return "---"
+        ultimos_3 = list(self.history_window)[-3:]
+        return ''.join(['🔴' if c == 'red' else '🔵' for c in ultimos_3])
     
-    def should_bet(self) -> bool:
-        return not self.esperando_win
+    def _detectar_alternancia(self) -> bool:
+        if len(self.history_window) < 3:
+            return False
+        ultimos_3 = list(self.history_window)[-3:]
+        return ultimos_3[0] != ultimos_3[1] and ultimos_3[1] != ultimos_3[2]
     
-    def get_status(self) -> str:
-        if self.esperando_win:
-            return "👻 ESPERANDO WIN PARA REANUDAR"
-        return "👻 ACTIVO (apostando)"
-
-# ==================== CLASE BASE CON NORMALIZACIÓN ====================
-class BaseStrategy:
-    @staticmethod
-    def normalizar_color(color: str) -> str:
+    def _detectar_ruptura(self) -> bool:
+        if len(self.history_window) < 2:
+            return False
+        ultimos_2 = list(self.history_window)[-2:]
+        return ultimos_2[0] == ultimos_2[1]
+    
+    def _calcular_senal(self) -> str:
+        """Calcula la señal según la lógica HACK (sin espera)"""
+        if len(self.history_window) == 0:
+            return 'red'
+        
+        ultimo = self.history_window[-1]
+        
+        # 1. ¿Hay ruptura? (2 iguales consecutivos)
+        if self._detectar_ruptura():
+            # Apuesta contraria UNA VEZ
+            return 'blue' if ultimo == 'red' else 'red'
+        
+        # 2. ¿Hay alternancia de 3?
+        if self._detectar_alternancia():
+            # Apostar al OPUESTO del último
+            return 'blue' if ultimo == 'red' else 'red'
+        
+        # 3. Modo normal: apostar al MISMO que el último
+        return ultimo
+    
+    def _update_status_display(self, current_color: str):
+        color_emoji = "🔴" if current_color == 'red' else "🔵"
+        color_text = "ROJO" if current_color == 'red' else "AZUL"
+        historial = self._get_historial_str()
+        ultimos_3 = self._get_ultimos_3_str()
+        
+        # Determinar estado actual
+        if len(self.history_window) >= 2 and self._detectar_ruptura():
+            estado = "⚡ RUPTURA DETECTADA - Apuesta CONTRARIA (única vez)"
+        elif len(self.history_window) >= 3 and self._detectar_alternancia():
+            estado = f"🔄 ALTERNANCIA ACTIVA ({ultimos_3}) - Apostando al OPUESTO"
+        else:
+            estado = "📊 MODO NORMAL - Apostando al MISMO color"
+        
+        if self.on_status:
+            self.on_status(f"{color_emoji} {color_text}\n📜 Historial: {historial}\n🎯 {estado}")
+    
+    def _make_prediction(self):
+        if len(self.history_window) == 0:
+            return
+        
+        prediction = self._calcular_senal()
+        self.pending_bet = prediction
+        pred_emoji = "🔴" if prediction == 'red' else "🔵"
+        
+        # Texto descriptivo de la señal
+        if self._detectar_ruptura():
+            texto = f"⚡ SEÑAL HACK (RUPTURA): {pred_emoji} (apuesta contraria única)"
+        elif self._detectar_alternancia():
+            texto = f"🔄 SEÑAL HACK (ALTERNANCIA): {pred_emoji} (apostar al OPUESTO)"
+        else:
+            texto = f"🎯 SEÑAL HACK (NORMAL): {pred_emoji} (apostar al MISMO)"
+        
+        if self.on_prediction:
+            self.on_prediction(texto)
+    
+    def process_color(self, color: str):
+        if not self.active:
+            return
+        
+        color = self._normalizar_color(color)
+        
+        # Resolver apuesta pendiente
+        if self.pending_bet is not None:
+            is_win = (self.pending_bet == color)
+            if self.on_result:
+                if is_win:
+                    self.on_result(f"✅ WIN", True)
+                    self.total_wins += 1
+                else:
+                    self.on_result(f"❌ LOSS", False)
+                    self.total_losses += 1
+        
+        # Actualizar historial
+        self.history_window.append(color)
+        self.pending_bet = None
+        
+        # Actualizar display
+        self._update_status_display(color)
+        
+        # Generar nueva señal para la PRÓXIMA ronda
+        self._make_prediction()
+    
+    def _normalizar_color(self, color: str) -> str:
         if color is None:
             return 'red'
         c = str(color).lower().strip()
@@ -287,479 +372,10 @@ class BaseStrategy:
         if '🟡' in c or 'amarillo' in c or 'yellow' in c:
             return 'blue'
         return 'red'
-
-# ==================== PREDICTOR ESTÁNDAR ====================
-class StandardPredictor:
-    def __init__(self, user_id: int):
-        self.user_id = user_id
-        self.history_window = deque(maxlen=20)
-        self.pending_bet = None
-        self.active = True
-        self.rounds_to_wait = 0
-        self.total_wins = 0
-        self.total_losses = 0
-        self.on_status = None
-        self.on_prediction = None
-        self.on_result = None
-    
-    def _get_historial_str(self):
-        last_10 = list(self.history_window)[-10:] if len(self.history_window) >= 10 else list(self.history_window)
-        return ''.join(['🔴' if c == 'red' else '🔵' for c in last_10])
-    
-    def _get_minority_color(self):
-        if len(self.history_window) < 5:
-            return None
-        last_5 = list(self.history_window)[-5:]
-        red_count = last_5.count('red')
-        blue_count = last_5.count('blue')
-        if red_count < blue_count:
-            return 'red'
-        elif blue_count < red_count:
-            return 'blue'
-        return None
-    
-    def _update_status_display(self, current_color: str):
-        color_emoji = "🔴" if current_color == 'red' else "🔵"
-        historial = self._get_historial_str()
-        if self.rounds_to_wait > 0:
-            estado = f"⏳ Esperando {self.rounds_to_wait} ronda(s)"
-        elif len(self.history_window) < 5:
-            estado = f"📊 Recopilando datos ({len(self.history_window)}/5)..."
-        else:
-            estado = "📊 Analizando minoría..."
-        if self.on_status:
-            self.on_status(f"{color_emoji}\nHistorial: {historial}\n{estado}")
-    
-    def _make_prediction(self):
-        if self.rounds_to_wait > 0 or len(self.history_window) < 5:
-            return
-        prediction = self._get_minority_color()
-        if prediction:
-            self.pending_bet = prediction
-            pred_emoji = "🔴" if prediction == 'red' else "🔵"
-            if self.on_prediction:
-                self.on_prediction(f"🎯 SEÑAL ESTÁNDAR: {pred_emoji}")
-    
-    def process_color(self, color: str):
-        if not self.active:
-            return
-        color = BaseStrategy.normalizar_color(color)
-        
-        if self.pending_bet is not None:
-            is_win = (self.pending_bet == color)
-            if self.on_result:
-                if is_win:
-                    self.on_result(f"✅ WIN", True)
-                    self.total_wins += 1
-                else:
-                    self.on_result(f"❌ LOSS - Esperando 1 ronda", False)
-                    self.total_losses += 1
-            if is_win:
-                self.rounds_to_wait = 0
-            else:
-                self.rounds_to_wait = 1
-            self.pending_bet = None
-            self.history_window.append(color)
-            self._update_status_display(color)
-            if is_win:
-                self._make_prediction()
-            return
-        
-        self.history_window.append(color)
-        self._update_status_display(color)
-        if self.rounds_to_wait > 0:
-            self.rounds_to_wait -= 1
-            return
-        if len(self.history_window) >= 5:
-            self._make_prediction()
     
     def reset(self):
         self.history_window.clear()
         self.pending_bet = None
-        self.rounds_to_wait = 0
-        self.total_wins = 0
-        self.total_losses = 0
-
-# ==================== PREDICTOR PEAK-BREAK ====================
-class PeakBreakPredictor(StandardPredictor):
-    def __init__(self, user_id: int):
-        super().__init__(user_id)
-        self.peak_active = False
-        self.loss_streak = 0
-    
-    def _update_status_display(self, current_color: str):
-        color_emoji = "🔴" if current_color == 'red' else "🔵"
-        historial = self._get_historial_str()
-        if self.peak_active:
-            estado = "⚡ ACTIVO (apostando opuesto)"
-        else:
-            remaining = 2 - self.loss_streak
-            estado = f"⏳ Peak-Break: esperando {remaining} LOSS para activar"
-        if self.on_status:
-            self.on_status(f"{color_emoji}\nHistorial: {historial}\n{estado}")
-    
-    def _make_prediction(self):
-        if self.rounds_to_wait > 0 or len(self.history_window) == 0:
-            return
-        current_color = list(self.history_window)[-1]
-        prediction = 'blue' if current_color == 'red' else 'red'
-        self.pending_bet = prediction
-        pred_emoji = "🔴" if prediction == 'red' else "🔵"
-        if self.on_prediction:
-            self.on_prediction(f"🎯 SEÑAL PEAK-BREAK: {pred_emoji}")
-    
-    def process_color(self, color: str):
-        if not self.active:
-            return
-        color = BaseStrategy.normalizar_color(color)
-        
-        if self.peak_active and self.pending_bet is not None:
-            is_win = (self.pending_bet == color)
-            if self.on_result:
-                if is_win:
-                    self.on_result(f"✅ WIN", True)
-                    self.total_wins += 1
-                else:
-                    self.on_result(f"❌ LOSS", False)
-                    self.total_losses += 1
-            if is_win:
-                self.peak_active = False
-                self.loss_streak = 0
-            self.pending_bet = None
-            self.history_window.append(color)
-            self._update_status_display(color)
-            return
-        
-        self.history_window.append(color)
-        if len(self.history_window) >= 2:
-            last_two = list(self.history_window)[-2:]
-            self.loss_streak = 2 if last_two[0] == last_two[1] else 1
-        else:
-            self.loss_streak = 1
-        
-        if not self.peak_active and self.loss_streak >= 2:
-            self.peak_active = True
-            if self.on_status:
-                self.on_status("⚡ PEAK-BREAK ACTIVADO")
-        
-        self._update_status_display(color)
-        
-        if not self.peak_active:
-            return
-        
-        if self.rounds_to_wait > 0:
-            self.rounds_to_wait -= 1
-            return
-        
-        if self.pending_bet is None:
-            self._make_prediction()
-    
-    def reset(self):
-        super().reset()
-        self.peak_active = False
-        self.loss_streak = 0
-
-# ==================== PREDICTOR HACK (CORREGIDO - VERSIÓN FINAL) ====================
-class HackPredictor:
-    def __init__(self, user_id: int):
-        self.user_id = user_id
-        self.history_window = deque(maxlen=20)
-        self.pending_bet = None
-        self.active = True
-        self.esperando_win = False
-        self.total_wins = 0
-        self.total_losses = 0
-        self.on_status = None
-        self.on_prediction = None
-        self.on_result = None
-    
-    def _get_minority_color(self):
-        """Calcula el color minoritario en los últimos 5 resultados"""
-        if len(self.history_window) < 5:
-            return None
-        last_5 = list(self.history_window)[-5:]
-        red_count = last_5.count('red')
-        blue_count = last_5.count('blue')
-        if red_count < blue_count:
-            return 'red'
-        elif blue_count < red_count:
-            return 'blue'
-        return None
-    
-    def _get_historial_str(self):
-        last_10 = list(self.history_window)[-10:] if len(self.history_window) >= 10 else list(self.history_window)
-        return ''.join(['🔴' if c == 'red' else '🔵' for c in last_10])
-    
-    def _get_minority_display(self):
-        minority = self._get_minority_color()
-        if minority == 'red':
-            return "🔴 ROJO"
-        elif minority == 'blue':
-            return "🔵 AZUL"
-        return "❓ EMPATE"
-    
-    def _update_status_display(self, current_color: str):
-        color_emoji = "🔴" if current_color == 'red' else "🔵"
-        color_text = "ROJO" if current_color == 'red' else "AZUL"
-        historial = self._get_historial_str()
-        
-        if self.esperando_win:
-            estado = f"⏸️ ESPERANDO WIN (señal teórica: {self._get_minority_display()})"
-        elif len(self.history_window) < 5:
-            estado = f"📊 Recopilando datos ({len(self.history_window)}/5)..."
-        else:
-            estado = f"🎯 Minoría últimos 5: {self._get_minority_display()}"
-        
-        if self.on_status:
-            self.on_status(f"{color_emoji} {color_text}\n📜 Historial: {historial}\n{estado}")
-    
-    def _mostrar_senal(self, prediction, es_teorica=False):
-        """Muestra la señal (normal o teórica)"""
-        if prediction is None:
-            return
-        pred_emoji = "🔴" if prediction == 'red' else "🔵"
-        if self.on_prediction:
-            if es_teorica:
-                self.on_prediction(f"🔍 SEÑAL TEÓRICA HACK (esperando WIN): {pred_emoji}")
-            else:
-                self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
-    
-    def _generar_y_mostrar_senal(self, es_teorica=False):
-        """Genera la señal basada en minoría y la muestra"""
-        if len(self.history_window) < 5:
-            return None
-        
-        prediction = self._get_minority_color()
-        if prediction:
-            self._mostrar_senal(prediction, es_teorica)
-            return prediction
-        return None
-    
-    def process_color(self, color: str):
-        if not self.active:
-            return
-        
-        color = BaseStrategy.normalizar_color(color)
-        
-        # ========== CASO 1: Estamos esperando un WIN ==========
-        if self.esperando_win:
-            # Generamos y mostramos señal teórica
-            senal_teorica = self._generar_y_mostrar_senal(es_teorica=True)
-            
-            # Verificamos si el color que salió es el que esperábamos (WIN)
-            if senal_teorica == color:
-                # ¡ES WIN! Reactivamos
-                self.esperando_win = False
-                if self.on_result:
-                    self.on_result(f"✅ WIN DETECTADO - Reanudando apuestas", True)
-                    self.total_wins += 1
-                
-                # Actualizar historial con el color actual
-                self.history_window.append(color)
-                self._update_status_display(color)
-                
-                # IMPORTANTE: Generar la siguiente señal PARA APOSTAR
-                senal = self._generar_y_mostrar_senal(es_teorica=False)
-                self.pending_bet = senal
-                return
-            else:
-                # Aún no hay WIN, solo actualizar historial
-                self.history_window.append(color)
-                self._update_status_display(color)
-                return
-        
-        # ========== CASO 2: Modo normal (NO estamos esperando WIN) ==========
-        
-        # Si tenemos apuesta pendiente, resolverla
-        if self.pending_bet is not None:
-            is_win = (self.pending_bet == color)
-            
-            if self.on_result:
-                if is_win:
-                    self.on_result(f"✅ WIN - Continuando normal", True)
-                    self.total_wins += 1
-                    # WIN: NO activamos espera, seguimos normal
-                else:
-                    self.on_result(f"❌ LOSS - Esperando un WIN para reanudar", False)
-                    self.total_losses += 1
-                    # LOSS: activamos espera
-                    self.esperando_win = True
-            
-            # Actualizar historial
-            self.history_window.append(color)
-            self.pending_bet = None
-            self._update_status_display(color)
-            
-            # Si fue WIN, generar siguiente señal inmediatamente
-            if not self.esperando_win:
-                senal = self._generar_y_mostrar_senal(es_teorica=False)
-                self.pending_bet = senal
-            return
-        
-        # No hay apuesta pendiente, solo actualizar historial y generar señal
-        self.history_window.append(color)
-        self._update_status_display(color)
-        
-        # Generar nueva señal si tenemos suficientes datos
-        if len(self.history_window) >= 5 and not self.esperando_win:
-            senal = self._generar_y_mostrar_senal(es_teorica=False)
-            self.pending_bet = senal
-    
-    def reset(self):
-        self.history_window.clear()
-        self.pending_bet = None
-        self.esperando_win = False
-        self.total_wins = 0
-        self.total_losses = 0
-
-# ==================== PREDICTOR GHOST ====================
-class GhostPredictor:
-    def __init__(self, user_id: int):
-        self.user_id = user_id
-        self.history_window = deque(maxlen=20)
-        self.pending_bet = None
-        self.active = True
-        self.modo_alternancia = False
-        self.esperando_win = False
-        self.total_wins = 0
-        self.total_losses = 0
-        self.on_status = None
-        self.on_prediction = None
-        self.on_result = None
-    
-    def _ultimos_3_son_alternancia(self) -> bool:
-        if len(self.history_window) < 3:
-            return False
-        ultimos_3 = list(self.history_window)[-3:]
-        return ultimos_3[0] != ultimos_3[1] and ultimos_3[1] != ultimos_3[2]
-    
-    def _hay_doble(self) -> bool:
-        if len(self.history_window) < 2:
-            return False
-        ultimos_2 = list(self.history_window)[-2:]
-        return ultimos_2[0] == ultimos_2[1]
-    
-    def _get_historial_str(self):
-        last_10 = list(self.history_window)[-10:] if len(self.history_window) >= 10 else list(self.history_window)
-        return ''.join(['🔴' if c == 'red' else '🔵' for c in last_10])
-    
-    def _update_status_display(self, current_color: str):
-        color_emoji = "🔴" if current_color == 'red' else "🔵"
-        color_text = "ROJO" if current_color == 'red' else "AZUL"
-        historial = self._get_historial_str()
-        
-        if self.modo_alternancia:
-            estado = "🔄 MODO ALTERNANCIA (apostando al OPUESTO)"
-        else:
-            estado = "🔵 MODO BASE (apostando al MISMO)"
-        
-        if self.esperando_win:
-            estado += " ⏳ ESPERANDO WIN PARA REANUDAR"
-        
-        if self.on_status:
-            self.on_status(f"{color_emoji} {color_text}\n📜 Historial: {historial}\n{estado}")
-    
-    def _mostrar_senal(self, senal: str):
-        pred_emoji = "🔴" if senal == 'red' else "🔵"
-        if self.on_prediction:
-            self.on_prediction(f"👻 SEÑAL GHOST: {pred_emoji}")
-    
-    def _make_prediction(self):
-        if len(self.history_window) == 0:
-            return
-        
-        # Si estamos esperando WIN, mostrar señal pero NO guardar pending_bet
-        if self.esperando_win:
-            ultimo = list(self.history_window)[-1]
-            self._mostrar_senal(ultimo)
-            return
-        
-        ultimo = list(self.history_window)[-1]
-        
-        # DOBLE (cuando rompe alternancia)
-        if self._hay_doble() and self.modo_alternancia:
-            self.modo_alternancia = False
-            self.pending_bet = 'blue' if ultimo == 'red' else 'red'
-            self._mostrar_senal(self.pending_bet)
-            return
-        
-        # MODO ALTERNANCIA activo
-        if self.modo_alternancia:
-            self.pending_bet = 'blue' if ultimo == 'red' else 'red'
-            self._mostrar_senal(self.pending_bet)
-            return
-        
-        # Alternancia detectada (activar modo)
-        if self._ultimos_3_son_alternancia():
-            self.modo_alternancia = True
-            self.pending_bet = 'blue' if ultimo == 'red' else 'red'
-            self._mostrar_senal(self.pending_bet)
-            return
-        
-        # MODO BASE
-        self.pending_bet = ultimo
-        self._mostrar_senal(self.pending_bet)
-    
-    def process_color(self, color: str):
-        if not self.active:
-            return
-        
-        color = BaseStrategy.normalizar_color(color)
-        
-        # VERIFICAR WIN DURANTE ESPERA
-        if self.esperando_win:
-            if len(self.history_window) > 0:
-                ultimo_anterior = list(self.history_window)[-1]
-                if self.modo_alternancia:
-                    senal_teorica = 'blue' if ultimo_anterior == 'red' else 'red'
-                else:
-                    senal_teorica = ultimo_anterior
-                
-                if color == senal_teorica:
-                    self.esperando_win = False
-                    if self.on_status:
-                        self.on_status("✅ WIN detectado - Reanudando apuestas")
-        
-        self.history_window.append(color)
-        
-        # Actualizar alternancia
-        if not self.modo_alternancia:
-            if self._ultimos_3_son_alternancia():
-                self.modo_alternancia = True
-                if self.on_status:
-                    ultimos_3 = list(self.history_window)[-3:]
-                    patron = ''.join(['🔴' if c == 'red' else '🔵' for c in ultimos_3])
-                    self.on_status(f"🔄 ¡ALTERNANCIA DETECTADA! ({patron}) - Cambiando a modo OPUESTO")
-        
-        self._update_status_display(color)
-        
-        # Resolver apuesta pendiente
-        if self.pending_bet is not None:
-            is_win = (self.pending_bet == color)
-            
-            if self.on_result:
-                if is_win:
-                    self.on_result(f"✅ WIN", True)
-                    self.total_wins += 1
-                else:
-                    self.on_result(f"❌ LOSS", False)
-                    self.total_losses += 1
-                    self.esperando_win = True
-                    if self.on_status:
-                        self.on_status("⏸️ LOSS detectado - Esperando un WIN para reanudar")
-                    if self.modo_alternancia:
-                        self.modo_alternancia = False
-            
-            self.pending_bet = None
-        
-        # Generar siguiente señal
-        self._make_prediction()
-    
-    def reset(self):
-        self.history_window.clear()
-        self.pending_bet = None
-        self.modo_alternancia = False
-        self.esperando_win = False
         self.total_wins = 0
         self.total_losses = 0
 
@@ -777,8 +393,7 @@ class GlobalPolling:
         if self._initialized:
             return
         self._initialized = True
-        self.user_predictors: Dict[int, object] = {}
-        self.user_mode: Dict[int, str] = {}
+        self.user_predictors: Dict[int, HackPredictor] = {}
         self.running = False
         self.last_processed_index = 0
         self.last_color_time = time.time()
@@ -787,24 +402,13 @@ class GlobalPolling:
         self._lock = threading.Lock()
         self.reconnect_timeout = 90
     
-    def register_user(self, user_id: int, mode: str, on_status=None, on_prediction=None, on_result=None):
+    def register_user(self, user_id: int, on_status=None, on_prediction=None, on_result=None):
         with self._lock:
-            if mode == "standard":
-                predictor = StandardPredictor(user_id)
-            elif mode == "peakbreak":
-                predictor = PeakBreakPredictor(user_id)
-            elif mode == "hack":
-                predictor = HackPredictor(user_id)
-            elif mode == "ghost":
-                predictor = GhostPredictor(user_id)
-            else:
-                predictor = StandardPredictor(user_id)
-            
+            predictor = HackPredictor(user_id)
             predictor.on_status = on_status
             predictor.on_prediction = on_prediction
             predictor.on_result = on_result
             self.user_predictors[user_id] = predictor
-            self.user_mode[user_id] = mode
             return predictor
     
     def unregister_user(self, user_id: int):
@@ -812,8 +416,6 @@ class GlobalPolling:
             if user_id in self.user_predictors:
                 self.user_predictors[user_id].active = False
                 del self.user_predictors[user_id]
-            if user_id in self.user_mode:
-                del self.user_mode[user_id]
     
     def start(self):
         if self.running:
@@ -884,7 +486,7 @@ class PredictionBot:
     
     async def _send_win_image(self, user_id: int):
         try:
-            await self.application.bot.send_photo(chat_id=user_id, photo=WIN_IMAGE_URL, caption="✅ WIN WITH THE PEAK BOT")
+            await self.application.bot.send_photo(chat_id=user_id, photo=WIN_IMAGE_URL, caption="✅ WIN WITH HACK BOT")
         except:
             await self._send_message(user_id, "✅ WIN")
     
@@ -897,18 +499,18 @@ class PredictionBot:
         
         if not license_check['valid']:
             keyboard = [
-                [InlineKeyboardButton("📅 Estándar 30d - 10 USDT", callback_data='plan_standard')],
-                [InlineKeyboardButton("📊 Peak-Break 30d - 15 USDT", callback_data='plan_peakbreak')],
                 [InlineKeyboardButton("🔧 Hack 30d - 18 USDT", callback_data='plan_hack')],
-                [InlineKeyboardButton("👻 Ghost 30d - 20 USDT", callback_data='plan_ghost')],
                 [InlineKeyboardButton("👥 Multiuser 30d - 45 USDT", callback_data='plan_multiuser')]
             ]
             await update.message.reply_text(
-                "🔒 ACCESO RESTRINGIDO\n\nNo tienes licencia activa.\n\n💰 PLANES DISPONIBLES:\n"
-                "• 📅 Estándar 30d: 10 USDT (minoría últimos 5)\n"
-                "• 📊 Peak-Break 30d: 15 USDT (entrar tras 2 LOSS)\n"
-                "• 🔧 Hack 30d: 18 USDT (minoría últimos 5 + espera WIN tras LOSS)\n"
-                "• 👻 Ghost 30d: 20 USDT (BASE + alternancia + espera WIN)\n"
+                "🔒 ACCESO RESTRINGIDO\n\nNo tienes licencia activa.\n\n"
+                "🎯 ESTRATEGIA HACK (ÚNICA):\n"
+                "• Apostar al color SALIENTE (el último)\n"
+                "• Si hay 3 alternados → apostar al OPUESTO\n"
+                "• Si hay 2 iguales (ruptura) → apostar CONTRARIO UNA VEZ\n"
+                "• Se apuesta en TODAS las rondas\n\n"
+                "💰 PLANES DISPONIBLES:\n"
+                "• 🔧 Hack 30d: 18 USDT (1 cuenta)\n"
                 "• 👥 Multiuser 30d: 45 USDT (hasta 5 cuentas)\n\n"
                 "Selecciona una opción:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
@@ -918,7 +520,6 @@ class PredictionBot:
         license_data = license_check['data']
         plan_name = LICENSE_PLANS[license_data['plan']]['name']
         max_accounts = license_data.get('max_users', 1)
-        allowed_mode = license_data.get('mode', 'standard')
         
         keyboard = [
             [InlineKeyboardButton("📡 MODO SEÑALES", callback_data='signals_mode')],
@@ -927,25 +528,13 @@ class PredictionBot:
             [InlineKeyboardButton("💰 Comprar Licencia", callback_data='buy_license')]
         ]
         
-        mode_msg = ""
-        if allowed_mode == "flexible":
-            mode_msg = "\n\n✅ Licencia MULTIUSUARIO - Puedes usar cualquier modo"
-        elif allowed_mode == "standard":
-            mode_msg = "\n\n📌 Tu licencia solo permite modo ESTÁNDAR"
-        elif allowed_mode == "peakbreak":
-            mode_msg = "\n\n📌 Tu licencia solo permite modo PEAK-BREAK"
-        elif allowed_mode == "hack":
-            mode_msg = "\n\n📌 Tu licencia solo permite modo HACK"
-        elif allowed_mode == "ghost":
-            mode_msg = "\n\n📌 Tu licencia solo permite modo GHOST"
-        
         await update.message.reply_text(
-            f"🎰 PREDICTOR PRO BOT\n\n✅ Licencia: {plan_name}\n👥 Máx cuentas: {max_accounts}{mode_msg}\n\n"
-            f"📊 ESTRATEGIAS DISPONIBLES:\n"
-            f"• ESTÁNDAR: Minoría últimos 5, LOSS espera 1 ronda\n"
-            f"• PEAK-BREAK: Entrar después de 2 LOSS seguidos\n"
-            f"• HACK: Minoría últimos 5, LOSS espera WIN para reanudar\n"
-            f"• GHOST: BASE→mismo, alternancia→opuesto, espera WIN después de LOSS\n\n"
+            f"🎰 HACK PREDICTOR BOT\n\n✅ Licencia: {plan_name}\n👥 Máx cuentas: {max_accounts}\n\n"
+            f"🎯 ESTRATEGIA HACK:\n"
+            f"• 📊 NORMAL: Apostar al MISMO color que salió\n"
+            f"• 🔄 ALTERNANCIA (3 seguidos): Apostar al OPUESTO\n"
+            f"• ⚡ RUPTURA (2 iguales): Apostar CONTRARIO 1 vez\n"
+            f"• 🎲 Se apuesta en TODAS las rondas\n\n"
             f"Selecciona una opción:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
@@ -959,9 +548,6 @@ class PredictionBot:
         if not license_check['valid']:
             await query.edit_message_text("❌ Licencia no válida. Usa /start")
             return
-        
-        license_data = license_check['data']
-        allowed_mode = license_data.get('mode', 'standard')
         
         if not self.global_polling.running:
             self.global_polling.start()
@@ -977,20 +563,18 @@ class PredictionBot:
             if is_win:
                 self._sync_send_win_image(user_id)
         
-        mode = allowed_mode if allowed_mode != "flexible" else "standard"
-        self.global_polling.register_user(user_id, mode, on_status, on_prediction, on_result)
-        self.user_sessions[user_id] = {'mode': 'signals', 'strategy': mode}
-        
-        mode_names = {
-            'standard': 'ESTÁNDAR (minoría últimos 5)',
-            'peakbreak': 'PEAK-BREAK (entrar tras 2 LOSS)',
-            'hack': 'HACK (minoría últimos 5 + espera WIN tras LOSS)',
-            'ghost': 'GHOST (BASE + alternancia + espera WIN)'
-        }
+        self.global_polling.register_user(user_id, on_status, on_prediction, on_result)
+        self.user_sessions[user_id] = {'mode': 'signals'}
         
         await query.edit_message_text(
-            f"📡 MODO SEÑALES ACTIVADO\n\n📊 Estrategia: {mode_names.get(mode, mode.upper())}\n\n"
-            f"Recibirás las señales automáticamente.\nEn cada WIN recibirás imagen especial.\n\nUsa /stop para detener."
+            f"📡 MODO SEÑALES ACTIVADO\n\n"
+            f"🎯 ESTRATEGIA HACK:\n"
+            f"• NORMAL: Apostar al MISMO color\n"
+            f"• ALTERNANCIA (3): Apostar al OPUESTO\n"
+            f"• RUPTURA (2 iguales): Apostar CONTRARIO 1 vez\n\n"
+            f"Recibirás las señales automáticamente.\n"
+            f"En cada WIN recibirás imagen especial.\n\n"
+            f"Usa /stop para detener."
         )
     
     async def auto_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1005,56 +589,24 @@ class PredictionBot:
         
         license_data = license_check['data']
         max_accounts = license_data.get('max_users', 1)
-        allowed_mode = license_data.get('mode', 'standard')
         
-        if allowed_mode == "flexible":
-            await query.edit_message_text(
-                "🤖 MODO AUTOMATICO\n\n📊 SELECCIONA ESTRATEGIA:\n"
-                "1️⃣ Estándar (minoría últimos 5)\n"
-                "2️⃣ Peak-Break (entrar tras 2 LOSS)\n"
-                "3️⃣ Hack (minoría últimos 5 + espera WIN)\n"
-                "4️⃣ Ghost (BASE + alternancia + espera WIN)\n\n"
-                "Envía el número:"
-            )
-            context.user_data['awaiting_strategy_selection'] = True
-            context.user_data['max_accounts'] = max_accounts
-        else:
-            await query.edit_message_text(
-                f"🤖 MODO AUTOMATICO\n\n📊 Estrategia asignada: {allowed_mode.upper()}\n\n"
-                f"Envía tus credenciales:\nusuario:contraseña\n\nMáx {max_accounts} cuentas: user1:pass1,user2:pass2"
-            )
-            context.user_data['awaiting_credentials'] = True
-            context.user_data['max_accounts'] = max_accounts
-            context.user_data['forced_strategy'] = allowed_mode
-    
-    async def select_strategy(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        text = update.message.text.strip()
-        strategy_map = {"1": "standard", "2": "peakbreak", "3": "hack", "4": "ghost"}
-        strategy = strategy_map.get(text)
-        if not strategy:
-            await update.message.reply_text("❌ Opción inválida. Envía 1, 2, 3 o 4")
-            return
-        context.user_data['selected_strategy'] = strategy
-        context.user_data['awaiting_strategy_selection'] = False
-        context.user_data['awaiting_credentials'] = True
-        
-        mode_names = {
-            'standard': 'ESTÁNDAR (minoría últimos 5)',
-            'peakbreak': 'PEAK-BREAK (entrar tras 2 LOSS)',
-            'hack': 'HACK (minoría últimos 5 + espera WIN)',
-            'ghost': 'GHOST (BASE + alternancia + espera WIN)'
-        }
-        
-        await update.message.reply_text(
-            f"✅ Estrategia seleccionada: {mode_names.get(strategy, strategy.upper())}\n\n"
-            f"Envía tus credenciales:\nusuario:contraseña\n\nMáx {context.user_data.get('max_accounts', 1)} cuentas: user1:pass1,user2:pass2"
+        await query.edit_message_text(
+            f"🤖 MODO AUTOMATICO\n\n"
+            f"🎯 ESTRATEGIA HACK:\n"
+            f"• NORMAL: Apostar al MISMO color\n"
+            f"• ALTERNANCIA (3): Apostar al OPUESTO\n"
+            f"• RUPTURA (2 iguales): Apostar CONTRARIO 1 vez\n\n"
+            f"Envía tus credenciales:\n"
+            f"usuario:contraseña\n\n"
+            f"Máx {max_accounts} cuentas: user1:pass1,user2:pass2"
         )
+        context.user_data['awaiting_credentials'] = True
+        context.user_data['max_accounts'] = max_accounts
     
     async def process_credentials(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         text = update.message.text
         max_accounts = context.user_data.get('max_accounts', 1)
-        strategy = context.user_data.get('selected_strategy', context.user_data.get('forced_strategy', 'standard'))
         
         accounts_data = []
         
@@ -1080,15 +632,7 @@ class PredictionBot:
         
         accounts = []
         for username, password in accounts_data:
-            if strategy == "peakbreak":
-                acc = PeakBreakAccount(username, password)
-            elif strategy == "hack":
-                acc = HackAccount(username, password)
-            elif strategy == "ghost":
-                acc = GhostAccount(username, password)
-            else:
-                acc = UserAccount(username, password)
-            
+            acc = HackAccount(username, password)
             success, msg = acc.login()
             if success:
                 accounts.append(acc)
@@ -1108,29 +652,30 @@ class PredictionBot:
             def on_prediction(msg):
                 self._sync_send_message(user_id, msg)
                 if self.user_sessions.get(user_id, {}).get('auto_betting_active'):
-                    color = None
+                    # Extraer color de la señal
                     if '🔴' in msg:
                         color = 'red'
                     elif '🔵' in msg:
                         color = 'blue'
+                    else:
+                        color = None
                     if color:
-                        self._execute_bets(user_id, color, strategy)
+                        self._execute_bets(user_id, color)
             
             def on_result(msg, is_win):
                 self._sync_send_message(user_id, msg)
                 if is_win:
                     self._sync_send_win_image(user_id)
                 if self.user_sessions.get(user_id, {}).get('auto_betting_active'):
-                    self._update_bet_on_result(user_id, is_win, strategy)
-                    self._show_balances(user_id, strategy)
+                    self._update_bet_on_result(user_id, is_win)
+                    self._show_balances(user_id)
             
-            self.global_polling.register_user(user_id, strategy, on_status, on_prediction, on_result)
+            self.global_polling.register_user(user_id, on_status, on_prediction, on_result)
             
             self.user_sessions[user_id] = {
                 'mode': 'auto',
                 'accounts': accounts,
                 'auto_betting_active': False,
-                'strategy': strategy,
                 'bet_config': {
                     'initial_bet': 0.1,
                     'current_bet': 0.1,
@@ -1145,16 +690,12 @@ class PredictionBot:
         
         context.user_data['awaiting_credentials'] = False
     
-    def _execute_bets(self, user_id: int, color: str, strategy: str):
+    def _execute_bets(self, user_id: int, color: str):
         session = self.user_sessions.get(user_id)
         if not session:
             return
         
         for account in session.get('accounts', []):
-            if strategy in ["peakbreak", "hack", "ghost"] and hasattr(account, 'should_bet'):
-                if not account.should_bet():
-                    continue
-            
             if not account.betting_active or account.balance <= 0 or account.current_bet > account.balance:
                 continue
             
@@ -1164,7 +705,7 @@ class PredictionBot:
             else:
                 self._sync_send_message(user_id, f"❌ {account.username}: {msg}")
     
-    def _update_bet_on_result(self, user_id: int, won: bool, strategy: str):
+    def _update_bet_on_result(self, user_id: int, won: bool):
         session = self.user_sessions.get(user_id)
         if not session:
             return
@@ -1176,58 +717,17 @@ class PredictionBot:
             if won:
                 account.wins += 1
                 account.reset_bet()
-                if strategy == "peakbreak" and hasattr(account, 'record_win'):
-                    account.record_win()
-                elif strategy == "hack" and hasattr(account, 'record_win'):
-                    account.record_win()
-                elif strategy == "ghost" and hasattr(account, 'record_win'):
-                    account.record_win()
                 self._sync_send_message(user_id, f"💰 {account.username}: WIN - Reiniciada a ${account.current_bet:.2f}")
             else:
                 account.losses += 1
-                
-                if strategy == "peakbreak" and hasattr(account, 'record_loss'):
-                    was_active = account.record_loss()
-                    if was_active:
-                        if account.consecutive_losses + 1 >= account.max_consecutive_losses:
-                            self._sync_send_message(user_id, f"🛑 {account.username}: Stop loss alcanzado")
-                            account.betting_active = False
-                        else:
-                            msg = account.update_bet_on_loss()
-                            self._sync_send_message(user_id, f"📉 {account.username}: {msg}")
-                    else:
-                        remaining = account.PEAKBREAK_THRESHOLD - account.peakbreak_consecutive_losses
-                        self._sync_send_message(user_id, f"📊 {account.username}: {account.peakbreak_consecutive_losses}/{account.PEAKBREAK_THRESHOLD} LOSS - Faltan {remaining}")
-                
-                elif strategy == "hack" and hasattr(account, 'record_loss'):
-                    account.record_loss()
-                    if account.consecutive_losses + 1 >= account.max_consecutive_losses:
-                        self._sync_send_message(user_id, f"🛑 {account.username}: Stop loss alcanzado")
-                        account.betting_active = False
-                    else:
-                        msg = account.update_bet_on_loss()
-                        self._sync_send_message(user_id, f"📉 {account.username}: {msg}")
-                    self._sync_send_message(user_id, f"⏸️ {account.username}: Esperando WIN para reanudar")
-                
-                elif strategy == "ghost" and hasattr(account, 'record_loss'):
-                    account.record_loss()
-                    if account.consecutive_losses + 1 >= account.max_consecutive_losses:
-                        self._sync_send_message(user_id, f"🛑 {account.username}: Stop loss alcanzado")
-                        account.betting_active = False
-                    else:
-                        msg = account.update_bet_on_loss()
-                        self._sync_send_message(user_id, f"📉 {account.username}: {msg}")
-                    self._sync_send_message(user_id, f"👻 {account.username}: Esperando WIN para reanudar")
-                
+                if account.consecutive_losses + 1 >= account.max_consecutive_losses:
+                    self._sync_send_message(user_id, f"🛑 {account.username}: Stop loss alcanzado")
+                    account.betting_active = False
                 else:
-                    if account.consecutive_losses + 1 >= account.max_consecutive_losses:
-                        self._sync_send_message(user_id, f"🛑 {account.username}: Stop loss alcanzado")
-                        account.betting_active = False
-                    else:
-                        msg = account.update_bet_on_loss()
-                        self._sync_send_message(user_id, f"📉 {account.username}: {msg}")
+                    msg = account.update_bet_on_loss()
+                    self._sync_send_message(user_id, f"📉 {account.username}: {msg}")
     
-    def _show_balances(self, user_id: int, strategy: str):
+    def _show_balances(self, user_id: int):
         session = self.user_sessions.get(user_id)
         if not session:
             return
@@ -1236,26 +736,13 @@ class PredictionBot:
         for acc in session.get('accounts', []):
             acc.get_balance()
             msg += f"• {acc.username}: ${acc.balance:.2f}\n"
-            if strategy == "peakbreak" and hasattr(acc, 'get_status'):
-                msg += f"  └─ {acc.get_status()}\n"
-            elif strategy == "hack" and hasattr(acc, 'get_status'):
-                msg += f"  └─ {acc.get_status()}\n"
-            elif strategy == "ghost" and hasattr(acc, 'get_status'):
-                msg += f"  └─ {acc.get_status()}\n"
+            msg += f"  └─ {acc.get_status()}\n"
         
         self._sync_send_message(user_id, msg)
     
     async def show_betting_config(self, update, user_id):
         session = self.user_sessions[user_id]
         config = session['bet_config']
-        strategy = session.get('strategy', 'standard')
-        
-        strategy_names = {
-            'standard': 'ESTÁNDAR (minoría últimos 5)',
-            'peakbreak': 'PEAK-BREAK (entrar tras 2 LOSS)',
-            'hack': 'HACK (minoría últimos 5 + espera WIN)',
-            'ghost': 'GHOST (BASE + alternancia + espera WIN)'
-        }
         
         keyboard = [
             [InlineKeyboardButton(f"💰 Inicial: ${config['initial_bet']}", callback_data='cfg_initial')],
@@ -1268,7 +755,10 @@ class PredictionBot:
         ]
         
         msg = (f"⚙️ CONFIGURACIÓN DE APUESTAS\n\n"
-               f"📊 Estrategia: {strategy_names.get(strategy, strategy.upper())}\n"
+               f"🎯 ESTRATEGIA HACK:\n"
+               f"• NORMAL: Apostar al MISMO color\n"
+               f"• ALTERNANCIA (3): Apostar al OPUESTO\n"
+               f"• RUPTURA (2 iguales): Apostar CONTRARIO 1 vez\n\n"
                f"💰 Apuesta actual: ${config['current_bet']}\n"
                f"🎲 Modo: {'Martingala (x2)' if config['use_martingale'] else 'Agresivo (x2+inicial)'}\n\n"
                f"Ejemplo con $0.10 inicial:\n"
@@ -1362,7 +852,6 @@ class PredictionBot:
             return
         
         config = self.user_sessions[user_id]['bet_config']
-        strategy = self.user_sessions[user_id].get('strategy', 'standard')
         
         for acc in self.user_sessions[user_id]['accounts']:
             acc.initial_bet = config['initial_bet']
@@ -1372,28 +861,18 @@ class PredictionBot:
             acc.use_martingale = config['use_martingale']
             acc.consecutive_losses = 0
             acc.betting_active = True
-            
-            if strategy == "peakbreak" and hasattr(acc, 'reset_peakbreak'):
-                acc.reset_peakbreak()
-            elif strategy == "hack" and hasattr(acc, 'record_win'):
-                acc.record_win()
-            elif strategy == "ghost" and hasattr(acc, 'record_win'):
-                acc.record_win()
+            acc.reset_estrategia()
         
         self.user_sessions[user_id]['auto_betting_active'] = True
         
         modo_texto = "Martingala (x2)" if config['use_martingale'] else "Agresivo (x2+inicial)"
         
-        strategy_names = {
-            'standard': 'ESTÁNDAR (minoría últimos 5)',
-            'peakbreak': 'PEAK-BREAK (entrar tras 2 LOSS)',
-            'hack': 'HACK (minoría últimos 5 + espera WIN tras LOSS)',
-            'ghost': 'GHOST (BASE + alternancia + espera WIN)'
-        }
-        
         await update.callback_query.edit_message_text(
             f"✅ AUTO-BET ACTIVADO\n\n"
-            f"📊 Estrategia: {strategy_names.get(strategy, strategy.upper())}\n"
+            f"🎯 ESTRATEGIA HACK:\n"
+            f"• NORMAL: Apostar al MISMO color\n"
+            f"• ALTERNANCIA (3): Apostar al OPUESTO\n"
+            f"• RUPTURA (2 iguales): Apostar CONTRARIO 1 vez\n\n"
             f"💰 Inicial: ${config['initial_bet']}\n"
             f"📈 Máximo: ${config['max_bet']}\n"
             f"🛑 Max Losses: {config['max_losses']}\n"
@@ -1410,26 +889,17 @@ class PredictionBot:
             await update.callback_query.answer("No hay sesión")
             return
         
-        strategy = session.get('strategy', 'standard')
         msg = "💰 BALANCES\n\n"
         for acc in session.get('accounts', []):
             acc.get_balance()
             msg += f"• {acc.username}: ${acc.balance:.2f}\n"
-            if strategy == "peakbreak" and hasattr(acc, 'get_status'):
-                msg += f"  └─ {acc.get_status()}\n"
-            elif strategy == "hack" and hasattr(acc, 'get_status'):
-                msg += f"  └─ {acc.get_status()}\n"
-            elif strategy == "ghost" and hasattr(acc, 'get_status'):
-                msg += f"  └─ {acc.get_status()}\n"
+            msg += f"  └─ {acc.get_status()}\n"
         
         await update.callback_query.edit_message_text(msg)
     
     async def buy_license(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
-            [InlineKeyboardButton("📅 Estándar 30d - 10 USDT", callback_data='plan_standard')],
-            [InlineKeyboardButton("📊 Peak-Break 30d - 15 USDT", callback_data='plan_peakbreak')],
             [InlineKeyboardButton("🔧 Hack 30d - 18 USDT", callback_data='plan_hack')],
-            [InlineKeyboardButton("👻 Ghost 30d - 20 USDT", callback_data='plan_ghost')],
             [InlineKeyboardButton("👥 Multiuser 30d - 45 USDT", callback_data='plan_multiuser')]
         ]
         await update.callback_query.edit_message_text(
@@ -1550,7 +1020,7 @@ class PredictionBot:
             await query.edit_message_text(
                 f"📜 INFORMACIÓN DE LICENCIA\n\n"
                 f"📋 Plan: {LICENSE_PLANS[data['plan']]['name']}\n"
-                f"👥 Modo: {data.get('mode', 'standard').upper()}\n"
+                f"🎯 Modo: HACK (alternancia + ruptura)\n"
                 f"🔢 Máx cuentas: {data.get('max_users', 1)}\n"
                 f"📅 Activada: {datetime.fromisoformat(data['activated']).strftime('%Y-%m-%d')}\n"
                 f"⏰ Expira: {expiry.strftime('%Y-%m-%d')}\n"
@@ -1581,12 +1051,9 @@ class PredictionBot:
             await update.message.reply_text(
                 "📋 USO: /validar USER_ID PLAN\n\n"
                 "PLANES DISPONIBLES:\n"
-                "• standard - Estándar 30 días (10 USDT)\n"
-                "• peakbreak - Peak-Break 30 días (15 USDT)\n"
                 "• hack - Hack 30 días (18 USDT)\n"
-                "• ghost - Ghost 30 días (20 USDT)\n"
                 "• multiuser - Multiuser 30 días (45 USDT)\n\n"
-                "Ejemplo: /validar 123456789 standard"
+                "Ejemplo: /validar 123456789 hack"
             )
             return
         
@@ -1606,7 +1073,7 @@ class PredictionBot:
                     target_user_id,
                     f"🎉 ¡LICENCIA ACTIVADA!\n\n"
                     f"📦 Plan: {plan_name}\n"
-                    f"📊 Modo: {LICENSE_PLANS[plan]['mode'].upper()}\n"
+                    f"🎯 Estrategia: HACK (alternancia + ruptura)\n"
                     f"👥 Máx cuentas: {LICENSE_PLANS[plan]['max_users']}\n\n"
                     f"✅ Ya puedes usar el bot.\n\n"
                     f"Usa /start para comenzar."
@@ -1633,9 +1100,7 @@ class PredictionBot:
             )
     
     async def handle_messages(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if context.user_data.get('awaiting_strategy_selection'):
-            await self.select_strategy(update, context)
-        elif context.user_data.get('awaiting_credentials'):
+        if context.user_data.get('awaiting_credentials'):
             await self.process_credentials(update, context)
         elif context.user_data.get('awaiting_initial_bet'):
             await self.process_initial_bet(update, context)
@@ -1680,32 +1145,29 @@ class PredictionBot:
         self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_any_photo))
         
         print("=" * 50)
-        print("🤖 PREDICTOR PRO BOT INICIADO - VERSIÓN DEFINITIVA")
+        print("🤖 HACK PREDICTOR BOT INICIADO - VERSIÓN DEFINITIVA")
         print("=" * 50)
-        print("📊 4 MODOS DE ESTRATEGIA:")
-        print("  • ESTÁNDAR - Minoría últimos 5 (pausa 1 ronda)")
-        print("  • PEAK-BREAK - Entrar después de 2 LOSS seguidos")
-        print("  • HACK - Minoría últimos 5 + esperar WIN tras LOSS")
-        print("  • GHOST - BASE: mismo color / Alternancia: opuesto / Espera WIN")
+        print("🎯 ESTRATEGIA ÚNICA: HACK")
+        print("  • NORMAL: Apostar al MISMO color")
+        print("  • ALTERNANCIA (3): Apostar al OPUESTO")
+        print("  • RUPTURA (2 iguales): Apostar CONTRARIO 1 vez")
+        print("  • Se apuesta en TODAS las rondas")
         print("=" * 50)
         print("💰 PLANES:")
-        print("  • 📅 Estándar 30d: 10 USDT")
-        print("  • 📊 Peak-Break 30d: 15 USDT")
-        print("  • 🔧 Hack 30d: 18 USDT")
-        print("  • 👻 Ghost 30d: 20 USDT")
-        print("  • 👥 Multiuser 30d: 45 USDT")
+        print("  • 🔧 Hack 30d: 18 USDT (1 cuenta)")
+        print("  • 👥 Multiuser 30d: 45 USDT (5 cuentas)")
         print("=" * 50)
         print("🎲 MODOS DE APUESTA:")
         print("  • Martingala: x2")
         print("  • Agresivo: (x2) + apuesta inicial")
         print("=" * 50)
         print("🖼️ IMAGEN WIN: Activada")
-        print("✅ AUTO-BET: Funcionando en todos los modos")
+        print("✅ AUTO-BET: Funcionando")
         print("=" * 50)
         
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    print("🚀 INICIANDO PREDICTOR PRO BOT...")
+    print("🚀 INICIANDO HACK PREDICTOR BOT...")
     bot = PredictionBot(BOT_TOKEN)
     bot.run()
