@@ -1,6 +1,5 @@
-# bot.py - PREDICTOR PRO BOT (UN SOLO MODO: HACK)
-# VERSIÓN DEFINITIVA - ALTERNANCIA DE 3 + RUPTURA
-# SIN ESPERA DE WIN - APUESTA EN CADA RONDA
+# bot.py - HACK PREDICTOR BOT (VERSIÓN DEFINITIVA)
+# SEÑAL SIMPLE: Solo muestra 🔴 o 🔵 sin detalles de estrategia
 
 import json
 import os
@@ -86,7 +85,7 @@ class LicenseManager:
         days = (expiry - datetime.now()).days
         return max(0, days)
 
-# ==================== USER ACCOUNT BASE ====================
+# ==================== USER ACCOUNT ====================
 class UserAccount:
     def __init__(self, username, password):
         self.username = username
@@ -177,92 +176,28 @@ class UserAccount:
             self.current_bet = new_bet
             return f"Agressive (x2+inicial): ${new_bet:.2f}"
 
-# ==================== CUENTA HACK (SIN ESPERA) ====================
+# ==================== CUENTA HACK ====================
 class HackAccount(UserAccount):
     def __init__(self, username, password):
         super().__init__(username, password)
-        self.modo_alternancia = False  # True = apostar opuesto, False = apostar mismo
-        self.contador_ruptura = 0  # Para la apuesta única de ruptura
-    
-    def reset_estrategia(self):
-        self.modo_alternancia = False
-        self.contador_ruptura = 0
-    
-    def procesar_historial(self, historial: deque) -> str:
-        """
-        Retorna el color a apostar basado en la lógica HACK:
-        - Normal: apostar al mismo color que salió
-        - Si últimos 3 son alternados: activar modo alternancia (apostar opuesto)
-        - Si hay ruptura (2 iguales): apostar contrario UNA VEZ y volver a normal
-        """
-        # Si estamos en modo ruptura (apuesta única)
-        if self.contador_ruptura > 0:
-            self.contador_ruptura -= 1
-            # Retornar el color contrario al último
-            ultimo = historial[-1] if historial else 'red'
-            resultado = 'blue' if ultimo == 'red' else 'red'
-            # Salir del modo ruptura después de esta apuesta
-            if self.contador_ruptura == 0:
-                self.modo_alternancia = False
-            return resultado
-        
-        # Verificar si hay 2 iguales consecutivos (RUPTURA)
-        if len(historial) >= 2:
-            ultimos_2 = list(historial)[-2:]
-            if ultimos_2[0] == ultimos_2[1]:
-                # ¡Ruptura detectada! Apuesta contraria UNA VEZ
-                self.contador_ruptura = 1
-                resultado = 'blue' if ultimos_2[0] == 'red' else 'red'
-                # Salimos del modo alternancia si estábamos en él
-                self.modo_alternancia = False
-                return resultado
-        
-        # Verificar si hay alternancia de 3
-        if len(historial) >= 3:
-            ultimos_3 = list(historial)[-3:]
-            if ultimos_3[0] != ultimos_3[1] and ultimos_3[1] != ultimos_3[2]:
-                # Activamos modo alternancia
-                self.modo_alternancia = True
-        
-        # Apostar según el modo actual
-        ultimo = historial[-1] if historial else 'red'
-        
-        if self.modo_alternancia:
-            # Modo alternancia: apostar al OPUESTO del último
-            return 'blue' if ultimo == 'red' else 'red'
-        else:
-            # Modo normal: apostar al MISMO que el último
-            return ultimo
     
     def get_status(self) -> str:
-        if self.contador_ruptura > 0:
-            return f"⚡ RUPTURA - Apuesta contraria (única)"
-        if self.modo_alternancia:
-            return "🔄 MODO ALTERNANCIA - Apostando al OPUESTO"
-        return "📊 MODO NORMAL - Apostando al MISMO color"
+        return f"💰 ${self.balance:.2f}"
 
-# ==================== PREDICTOR HACK ====================
+# ==================== PREDICTOR HACK (VERSIÓN SIMPLE) ====================
 class HackPredictor:
     def __init__(self, user_id: int):
         self.user_id = user_id
         self.history_window = deque(maxlen=20)
-        self.pending_bet = None
         self.active = True
         self.total_wins = 0
         self.total_losses = 0
-        self.on_status = None
+        self.pending_bet = None
         self.on_prediction = None
         self.on_result = None
-    
-    def _get_historial_str(self):
-        last_10 = list(self.history_window)[-10:] if len(self.history_window) >= 10 else list(self.history_window)
-        return ''.join(['🔴' if c == 'red' else '🔵' for c in last_10])
-    
-    def _get_ultimos_3_str(self):
-        if len(self.history_window) < 3:
-            return "---"
-        ultimos_3 = list(self.history_window)[-3:]
-        return ''.join(['🔴' if c == 'red' else '🔵' for c in ultimos_3])
+        
+        # Control de estado
+        self.apuesta_ruptura_realizada = False
     
     def _detectar_alternancia(self) -> bool:
         if len(self.history_window) < 3:
@@ -271,66 +206,55 @@ class HackPredictor:
         return ultimos_3[0] != ultimos_3[1] and ultimos_3[1] != ultimos_3[2]
     
     def _detectar_ruptura(self) -> bool:
-        if len(self.history_window) < 2:
+        if len(self.history_window) < 4:
             return False
-        ultimos_2 = list(self.history_window)[-2:]
-        return ultimos_2[0] == ultimos_2[1]
+        
+        ultimos_4 = list(self.history_window)[-4:]
+        
+        # Los últimos 2 son iguales?
+        if ultimos_4[-2] != ultimos_4[-1]:
+            return False
+        
+        # Verificar que antes venía alternando
+        if ultimos_4[0] != ultimos_4[1] and ultimos_4[1] != ultimos_4[2] and ultimos_4[2] != ultimos_4[3]:
+            return False
+        
+        return True
     
     def _calcular_senal(self) -> str:
-        """Calcula la señal según la lógica HACK (sin espera)"""
         if len(self.history_window) == 0:
             return 'red'
         
         ultimo = self.history_window[-1]
         
-        # 1. ¿Hay ruptura? (2 iguales consecutivos)
+        # Si acabamos de hacer la apuesta de ruptura, volver a NORMAL
+        if self.apuesta_ruptura_realizada:
+            self.apuesta_ruptura_realizada = False
+            return ultimo
+        
+        # ¿Hay ruptura?
         if self._detectar_ruptura():
-            # Apuesta contraria UNA VEZ
+            self.apuesta_ruptura_realizada = True
             return 'blue' if ultimo == 'red' else 'red'
         
-        # 2. ¿Hay alternancia de 3?
+        # ¿Hay alternancia?
         if self._detectar_alternancia():
-            # Apostar al OPUESTO del último
             return 'blue' if ultimo == 'red' else 'red'
         
-        # 3. Modo normal: apostar al MISMO que el último
+        # Modo normal
         return ultimo
     
-    def _update_status_display(self, current_color: str):
-        color_emoji = "🔴" if current_color == 'red' else "🔵"
-        color_text = "ROJO" if current_color == 'red' else "AZUL"
-        historial = self._get_historial_str()
-        ultimos_3 = self._get_ultimos_3_str()
-        
-        # Determinar estado actual
-        if len(self.history_window) >= 2 and self._detectar_ruptura():
-            estado = "⚡ RUPTURA DETECTADA - Apuesta CONTRARIA (única vez)"
-        elif len(self.history_window) >= 3 and self._detectar_alternancia():
-            estado = f"🔄 ALTERNANCIA ACTIVA ({ultimos_3}) - Apostando al OPUESTO"
-        else:
-            estado = "📊 MODO NORMAL - Apostando al MISMO color"
-        
-        if self.on_status:
-            self.on_status(f"{color_emoji} {color_text}\n📜 Historial: {historial}\n🎯 {estado}")
-    
-    def _make_prediction(self):
+    def _enviar_senal(self):
         if len(self.history_window) == 0:
-            return
+            return None
         
         prediction = self._calcular_senal()
-        self.pending_bet = prediction
         pred_emoji = "🔴" if prediction == 'red' else "🔵"
         
-        # Texto descriptivo de la señal
-        if self._detectar_ruptura():
-            texto = f"⚡ SEÑAL HACK (RUPTURA): {pred_emoji} (apuesta contraria única)"
-        elif self._detectar_alternancia():
-            texto = f"🔄 SEÑAL HACK (ALTERNANCIA): {pred_emoji} (apostar al OPUESTO)"
-        else:
-            texto = f"🎯 SEÑAL HACK (NORMAL): {pred_emoji} (apostar al MISMO)"
-        
         if self.on_prediction:
-            self.on_prediction(texto)
+            self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
+        
+        return prediction
     
     def process_color(self, color: str):
         if not self.active:
@@ -338,7 +262,7 @@ class HackPredictor:
         
         color = self._normalizar_color(color)
         
-        # Resolver apuesta pendiente
+        # Verificar resultado de la apuesta anterior
         if self.pending_bet is not None:
             is_win = (self.pending_bet == color)
             if self.on_result:
@@ -348,16 +272,13 @@ class HackPredictor:
                 else:
                     self.on_result(f"❌ LOSS", False)
                     self.total_losses += 1
+            self.pending_bet = None
         
-        # Actualizar historial
+        # Agregar el nuevo color al historial
         self.history_window.append(color)
-        self.pending_bet = None
         
-        # Actualizar display
-        self._update_status_display(color)
-        
-        # Generar nueva señal para la PRÓXIMA ronda
-        self._make_prediction()
+        # Generar nueva señal
+        self.pending_bet = self._enviar_senal()
     
     def _normalizar_color(self, color: str) -> str:
         if color is None:
@@ -367,10 +288,6 @@ class HackPredictor:
             return 'red'
         if c in ['blue', 'azul', '🔵', '2', 'b']:
             return 'blue'
-        if '🟢' in c or 'verde' in c or 'green' in c:
-            return 'red'
-        if '🟡' in c or 'amarillo' in c or 'yellow' in c:
-            return 'blue'
         return 'red'
     
     def reset(self):
@@ -378,6 +295,7 @@ class HackPredictor:
         self.pending_bet = None
         self.total_wins = 0
         self.total_losses = 0
+        self.apuesta_ruptura_realizada = False
 
 # ==================== POLLING GLOBAL ====================
 class GlobalPolling:
@@ -402,10 +320,9 @@ class GlobalPolling:
         self._lock = threading.Lock()
         self.reconnect_timeout = 90
     
-    def register_user(self, user_id: int, on_status=None, on_prediction=None, on_result=None):
+    def register_user(self, user_id: int, on_prediction=None, on_result=None):
         with self._lock:
             predictor = HackPredictor(user_id)
-            predictor.on_status = on_status
             predictor.on_prediction = on_prediction
             predictor.on_result = on_result
             self.user_predictors[user_id] = predictor
@@ -486,7 +403,7 @@ class PredictionBot:
     
     async def _send_win_image(self, user_id: int):
         try:
-            await self.application.bot.send_photo(chat_id=user_id, photo=WIN_IMAGE_URL, caption="✅ WIN WITH HACK BOT")
+            await self.application.bot.send_photo(chat_id=user_id, photo=WIN_IMAGE_URL, caption="✅ WIN")
         except:
             await self._send_message(user_id, "✅ WIN")
     
@@ -504,11 +421,6 @@ class PredictionBot:
             ]
             await update.message.reply_text(
                 "🔒 ACCESO RESTRINGIDO\n\nNo tienes licencia activa.\n\n"
-                "🎯 ESTRATEGIA HACK (ÚNICA):\n"
-                "• Apostar al color SALIENTE (el último)\n"
-                "• Si hay 3 alternados → apostar al OPUESTO\n"
-                "• Si hay 2 iguales (ruptura) → apostar CONTRARIO UNA VEZ\n"
-                "• Se apuesta en TODAS las rondas\n\n"
                 "💰 PLANES DISPONIBLES:\n"
                 "• 🔧 Hack 30d: 18 USDT (1 cuenta)\n"
                 "• 👥 Multiuser 30d: 45 USDT (hasta 5 cuentas)\n\n"
@@ -530,11 +442,6 @@ class PredictionBot:
         
         await update.message.reply_text(
             f"🎰 HACK PREDICTOR BOT\n\n✅ Licencia: {plan_name}\n👥 Máx cuentas: {max_accounts}\n\n"
-            f"🎯 ESTRATEGIA HACK:\n"
-            f"• 📊 NORMAL: Apostar al MISMO color que salió\n"
-            f"• 🔄 ALTERNANCIA (3 seguidos): Apostar al OPUESTO\n"
-            f"• ⚡ RUPTURA (2 iguales): Apostar CONTRARIO 1 vez\n"
-            f"• 🎲 Se apuesta en TODAS las rondas\n\n"
             f"Selecciona una opción:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
@@ -552,9 +459,6 @@ class PredictionBot:
         if not self.global_polling.running:
             self.global_polling.start()
         
-        def on_status(msg):
-            self._sync_send_message(user_id, msg)
-        
         def on_prediction(msg):
             self._sync_send_message(user_id, msg)
         
@@ -563,15 +467,11 @@ class PredictionBot:
             if is_win:
                 self._sync_send_win_image(user_id)
         
-        self.global_polling.register_user(user_id, on_status, on_prediction, on_result)
+        self.global_polling.register_user(user_id, on_prediction, on_result)
         self.user_sessions[user_id] = {'mode': 'signals'}
         
         await query.edit_message_text(
             f"📡 MODO SEÑALES ACTIVADO\n\n"
-            f"🎯 ESTRATEGIA HACK:\n"
-            f"• NORMAL: Apostar al MISMO color\n"
-            f"• ALTERNANCIA (3): Apostar al OPUESTO\n"
-            f"• RUPTURA (2 iguales): Apostar CONTRARIO 1 vez\n\n"
             f"Recibirás las señales automáticamente.\n"
             f"En cada WIN recibirás imagen especial.\n\n"
             f"Usa /stop para detener."
@@ -592,10 +492,6 @@ class PredictionBot:
         
         await query.edit_message_text(
             f"🤖 MODO AUTOMATICO\n\n"
-            f"🎯 ESTRATEGIA HACK:\n"
-            f"• NORMAL: Apostar al MISMO color\n"
-            f"• ALTERNANCIA (3): Apostar al OPUESTO\n"
-            f"• RUPTURA (2 iguales): Apostar CONTRARIO 1 vez\n\n"
             f"Envía tus credenciales:\n"
             f"usuario:contraseña\n\n"
             f"Máx {max_accounts} cuentas: user1:pass1,user2:pass2"
@@ -646,13 +542,9 @@ class PredictionBot:
             if not self.global_polling.running:
                 self.global_polling.start()
             
-            def on_status(msg):
-                self._sync_send_message(user_id, msg)
-            
             def on_prediction(msg):
                 self._sync_send_message(user_id, msg)
                 if self.user_sessions.get(user_id, {}).get('auto_betting_active'):
-                    # Extraer color de la señal
                     if '🔴' in msg:
                         color = 'red'
                     elif '🔵' in msg:
@@ -670,7 +562,7 @@ class PredictionBot:
                     self._update_bet_on_result(user_id, is_win)
                     self._show_balances(user_id)
             
-            self.global_polling.register_user(user_id, on_status, on_prediction, on_result)
+            self.global_polling.register_user(user_id, on_prediction, on_result)
             
             self.user_sessions[user_id] = {
                 'mode': 'auto',
@@ -732,11 +624,10 @@ class PredictionBot:
         if not session:
             return
         
-        msg = "💰 SALDOS ACTUALIZADOS\n\n"
+        msg = "💰 SALDOS\n\n"
         for acc in session.get('accounts', []):
             acc.get_balance()
             msg += f"• {acc.username}: ${acc.balance:.2f}\n"
-            msg += f"  └─ {acc.get_status()}\n"
         
         self._sync_send_message(user_id, msg)
     
@@ -754,11 +645,7 @@ class PredictionBot:
             [InlineKeyboardButton("◀️ Volver", callback_data='back_to_start')]
         ]
         
-        msg = (f"⚙️ CONFIGURACIÓN DE APUESTAS\n\n"
-               f"🎯 ESTRATEGIA HACK:\n"
-               f"• NORMAL: Apostar al MISMO color\n"
-               f"• ALTERNANCIA (3): Apostar al OPUESTO\n"
-               f"• RUPTURA (2 iguales): Apostar CONTRARIO 1 vez\n\n"
+        msg = (f"⚙️ CONFIGURACIÓN\n\n"
                f"💰 Apuesta actual: ${config['current_bet']}\n"
                f"🎲 Modo: {'Martingala (x2)' if config['use_martingale'] else 'Agresivo (x2+inicial)'}\n\n"
                f"Ejemplo con $0.10 inicial:\n"
@@ -861,7 +748,6 @@ class PredictionBot:
             acc.use_martingale = config['use_martingale']
             acc.consecutive_losses = 0
             acc.betting_active = True
-            acc.reset_estrategia()
         
         self.user_sessions[user_id]['auto_betting_active'] = True
         
@@ -869,16 +755,11 @@ class PredictionBot:
         
         await update.callback_query.edit_message_text(
             f"✅ AUTO-BET ACTIVADO\n\n"
-            f"🎯 ESTRATEGIA HACK:\n"
-            f"• NORMAL: Apostar al MISMO color\n"
-            f"• ALTERNANCIA (3): Apostar al OPUESTO\n"
-            f"• RUPTURA (2 iguales): Apostar CONTRARIO 1 vez\n\n"
             f"💰 Inicial: ${config['initial_bet']}\n"
             f"📈 Máximo: ${config['max_bet']}\n"
             f"🛑 Max Losses: {config['max_losses']}\n"
-            f"🎲 Modo apuesta: {modo_texto}\n"
-            f"📊 Cuentas activas: {len(self.user_sessions[user_id]['accounts'])}\n\n"
-            f"🎉 En cada WIN recibirás imagen especial\n\n"
+            f"🎲 Modo: {modo_texto}\n"
+            f"📊 Cuentas: {len(self.user_sessions[user_id]['accounts'])}\n\n"
             f"Usa /stop para detener."
         )
     
@@ -893,7 +774,6 @@ class PredictionBot:
         for acc in session.get('accounts', []):
             acc.get_balance()
             msg += f"• {acc.username}: ${acc.balance:.2f}\n"
-            msg += f"  └─ {acc.get_status()}\n"
         
         await update.callback_query.edit_message_text(msg)
     
@@ -1020,7 +900,6 @@ class PredictionBot:
             await query.edit_message_text(
                 f"📜 INFORMACIÓN DE LICENCIA\n\n"
                 f"📋 Plan: {LICENSE_PLANS[data['plan']]['name']}\n"
-                f"🎯 Modo: HACK (alternancia + ruptura)\n"
                 f"🔢 Máx cuentas: {data.get('max_users', 1)}\n"
                 f"📅 Activada: {datetime.fromisoformat(data['activated']).strftime('%Y-%m-%d')}\n"
                 f"⏰ Expira: {expiry.strftime('%Y-%m-%d')}\n"
@@ -1073,7 +952,6 @@ class PredictionBot:
                     target_user_id,
                     f"🎉 ¡LICENCIA ACTIVADA!\n\n"
                     f"📦 Plan: {plan_name}\n"
-                    f"🎯 Estrategia: HACK (alternancia + ruptura)\n"
                     f"👥 Máx cuentas: {LICENSE_PLANS[plan]['max_users']}\n\n"
                     f"✅ Ya puedes usar el bot.\n\n"
                     f"Usa /start para comenzar."
@@ -1145,29 +1023,22 @@ class PredictionBot:
         self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_any_photo))
         
         print("=" * 50)
-        print("🤖 HACK PREDICTOR BOT INICIADO - VERSIÓN DEFINITIVA")
-        print("=" * 50)
-        print("🎯 ESTRATEGIA ÚNICA: HACK")
-        print("  • NORMAL: Apostar al MISMO color")
-        print("  • ALTERNANCIA (3): Apostar al OPUESTO")
-        print("  • RUPTURA (2 iguales): Apostar CONTRARIO 1 vez")
-        print("  • Se apuesta en TODAS las rondas")
+        print("🤖 HACK PREDICTOR BOT V2 - ACTIVADO")
         print("=" * 50)
         print("💰 PLANES:")
-        print("  • 🔧 Hack 30d: 18 USDT (1 cuenta)")
-        print("  • 👥 Multiuser 30d: 45 USDT (5 cuentas)")
+        print("  • Hack 30d: 18 USDT (1 cuenta)")
+        print("  • Multiuser 30d: 45 USDT (5 cuentas)")
         print("=" * 50)
         print("🎲 MODOS DE APUESTA:")
         print("  • Martingala: x2")
-        print("  • Agresivo: (x2) + apuesta inicial")
+        print("  • Agresivo: (x2) + inicial")
         print("=" * 50)
-        print("🖼️ IMAGEN WIN: Activada")
-        print("✅ AUTO-BET: Funcionando")
+        print("✅ BOT LISTO")
         print("=" * 50)
         
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    print("🚀 INICIANDO HACK PREDICTOR BOT...")
+    print("🚀 INICIANDO...")
     bot = PredictionBot(BOT_TOKEN)
     bot.run()
