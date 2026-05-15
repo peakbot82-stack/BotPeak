@@ -741,11 +741,11 @@ class PredictionBot:
         config = session['bet_config']
         bot_mode = session.get('bot_mode', 'hack')
         
-        take_profit_text = config.get('take_profit', 0)
-        if take_profit_text == 0:
+        take_profit_val = config.get('take_profit', 0)
+        if take_profit_val == 0:
             tp_display = "DESACTIVADO"
         else:
-            tp_display = f"${take_profit_text}"
+            tp_display = f"${take_profit_val}"
         
         modo_texto = "⚡ HACK (apuesta en cada señal)" if bot_mode == "hack" else "⛰️ PEAK BREAK (espera 3 pérdidas, luego apuesta hasta ganar)"
         
@@ -760,11 +760,13 @@ class PredictionBot:
             [InlineKeyboardButton("◀️ Volver", callback_data='back_to_start')]
         ]
         
+        tp_texto = "DESACTIVADO" if config.get('take_profit', 0) == 0 else f"${config.get('take_profit', 0)}"
+        
         msg = (f"⚙️ CONFIGURACIÓN\n\n"
                f"🎲 Estrategia del bot: {modo_texto}\n"
                f"💰 Apuesta actual: ${config['current_bet']}\n"
                f"🎲 Modo gestión: {'Martingala (x2)' if config['use_martingale'] else 'Agresivo (x2+inicial)'}\n"
-               f"🎯 Take Profit: {'DESACTIVADO' if config.get('take_profit', 0) == 0 else f'${config.get(\"take_profit\", 0)}'}\n\n"
+               f"🎯 Take Profit: {tp_texto}\n\n"
                f"Ejemplo con $0.10 inicial:\n"
                f"• Martingala: 0.10 → 0.20 → 0.40 → 0.80\n"
                f"• Agresivo: 0.10 → 0.30 → 0.70 → 1.50")
