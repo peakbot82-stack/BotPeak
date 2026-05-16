@@ -1,5 +1,6 @@
-# bot.py - HACK PREDICTOR BOT (VERSIÓN DEFINITIVA CON PEAK BREAK + TAKE PROFIT)
-# PRECIOS ACTUALIZADOS: HACK=15, PEAK BREAK=35, MULTIUSER=75
+# bot.py - HACK PREDICTOR BOT (VERSIÓN DEFINITIVA)
+# PRECIOS: HACK=15, PEAK BREAK=35, MULTIUSER=75
+# LÓGICA HACK: BASE (seguir color) → ALTERNANCIA (3 colores) → RUPTURA (4 colores)
 
 import json
 import os
@@ -23,7 +24,7 @@ MY_WALLET_BEP20 = "0x621917958C7ac81190e9f876C23D6B9914f31263"
 # IMAGEN DE WIN
 WIN_IMAGE_URL = "https://i.postimg.cc/T2pH8v1q/1777831023149.png"
 
-# ==================== PLANES DE LICENCIA (PRECIOS ACTUALIZADOS) ====================
+# ==================== PLANES DE LICENCIA ====================
 LICENSE_PLANS = {
     "hack": {"price": 15, "days": 30, "mode": "hack", "max_users": 1, "name": "🔧 Hack 30 Días"},
     "multiuser": {"price": 75, "days": 30, "mode": "hack", "max_users": 5, "name": "👥 Multiuser 30 Días"},
@@ -203,7 +204,7 @@ class HackAccount(UserAccount):
     def get_status(self) -> str:
         return f"💰 ${self.balance:.2f}"
 
-# ==================== PREDICTOR HACK ====================
+# ==================== PREDICTOR HACK (LÓGICA CORREGIDA: BASE → ALTERNANCIA → RUPTURA) ====================
 class HackPredictor:
     def __init__(self, user_id: int):
         self.user_id = user_id
@@ -214,45 +215,67 @@ class HackPredictor:
         self.pending_bet = None
         self.on_prediction = None
         self.on_result = None
-        self.apuesta_ruptura_realizada = False
+        self.estaba_en_alternancia = False  # Para saber si veníamos de alternancia
     
     def _detectar_alternancia(self) -> bool:
+        """Detecta si los últimos 3 colores alternan (ej: 🔴🔵🔴 o 🔵🔴🔵)"""
         if len(self.history_window) < 3:
             return False
         ultimos_3 = list(self.history_window)[-3:]
         return ultimos_3[0] != ultimos_3[1] and ultimos_3[1] != ultimos_3[2]
     
     def _detectar_ruptura(self) -> bool:
+        """Detecta ruptura: venía alternando y ahora 2 iguales (ej: 🔴🔵🔴🔴)"""
         if len(self.history_window) < 4:
             return False
         ultimos_4 = list(self.history_window)[-4:]
-        if ultimos_4[-2] != ultimos_4[-1]:
-            return False
-        if ultimos_4[0] != ultimos_4[1] and ultimos_4[1] != ultimos_4[2] and ultimos_4[2] != ultimos_4[3]:
-            return False
-        return True
+        # Últimos 2 son iguales Y los 3 anteriores alternaban
+        return (ultimos_4[-2] == ultimos_4[-1] and 
+                ultimos_4[0] != ultimos_4[1] and 
+                ultimos_4[1] != ultimos_4[2])
     
     def _calcular_senal(self) -> str:
         if len(self.history_window) == 0:
             return 'red'
+        
         ultimo = self.history_window[-1]
-        if self.apuesta_ruptura_realizada:
-            self.apuesta_ruptura_realizada = False
-            return ultimo
-        if self._detectar_ruptura():
-            self.apuesta_ruptura_realizada = True
-            return 'blue' if ultimo == 'red' else 'red'
+        
+        # 1º BASE: Por defecto, seguir el color (CONTINUIDAD)
+        # Esto es lo que pasa la mayor parte del tiempo
+        
+        # 2º ¿Hay ALTERNANCIA? (3 colores alternados)
         if self._detectar_alternancia():
+            self.estaba_en_alternancia = True
+            # Predecir el contrario para seguir alternando
             return 'blue' if ultimo == 'red' else 'red'
+        
+        # 3º ¿Hay RUPTURA? (se rompió la alternancia)
+        if self._detectar_ruptura():
+            self.estaba_en_alternancia = False
+            # Predecir el contrario (por la ruptura)
+            return 'blue' if ultimo == 'red' else 'red'
+        
+        # Si no hay ni alternancia ni ruptura → BASE
+        self.estaba_en_alternancia = False
         return ultimo
+    
+    def _obtener_logica_usada(self) -> str:
+        if self._detectar_ruptura():
+            return "RUPTURA"
+        if self._detectar_alternancia():
+            return "ALTERNANCIA"
+        return "BASE"
     
     def _enviar_senal(self):
         if len(self.history_window) == 0:
             return None
         prediction = self._calcular_senal()
         pred_emoji = "🔴" if prediction == 'red' else "🔵"
+        logica = self._obtener_logica_usada()
+        
         if self.on_prediction:
-            self.on_prediction(f"🎯 SEÑAL HACK: {pred_emoji}")
+            self.on_prediction(f"🎯 SEÑAL HACK ({logica}): {pred_emoji}")
+        
         return prediction
     
     def process_color(self, color: str):
@@ -287,15 +310,14 @@ class HackPredictor:
         self.pending_bet = None
         self.total_wins = 0
         self.total_losses = 0
-        self.apuesta_ruptura_realizada = False
+        self.estaba_en_alternancia = False
 
-# ==================== PREDICTOR PEAK BREAK (CORREGIDO) ====================
+# ==================== PREDICTOR PEAK BREAK ====================
 class PeakBreakPredictor(HackPredictor):
     """
     Modo Peak Break: Solo apuesta después de 3 pérdidas consecutivas.
     Cuando gana, se desactiva y vuelve a esperar 3 pérdidas.
     Cuando pierde, sigue apostando en cada ronda hasta ganar.
-    CORREGIDO: Después de WIN, NO apuesta hasta tener 3 pérdidas nuevamente.
     """
     def __init__(self, user_id: int):
         super().__init__(user_id)
@@ -309,7 +331,9 @@ class PeakBreakPredictor(HackPredictor):
         
         color = self._normalizar_color(color)
         
-        # VERIFICAR RESULTADO DE APUESTA ANTERIOR
+        # ============================================
+        # 1. VERIFICAR RESULTADO DE APUESTA ANTERIOR
+        # ============================================
         if self.pending_bet is not None:
             is_win = (self.pending_bet == color)
             
@@ -317,59 +341,69 @@ class PeakBreakPredictor(HackPredictor):
                 if is_win:
                     self.on_result(f"✅ WIN", True)
                     self.total_wins += 1
-                    # GANÓ → Reiniciar completamente el modo Peak Break
+                    # GANÓ → Reiniciar completamente
                     self.in_peak_mode = False
                     self.waiting_for_losses = True
                     self.consecutive_losses_count = 0
                     self.pending_bet = None
                     if self.on_prediction:
-                        self.on_prediction(f"⛰️ PEAK BREAK: WIN - Volviendo a esperar 3 pérdidas (NO se apostará hasta nueva señal)")
+                        self.on_prediction(f"⛰️ PEAK BREAK: WIN - Volviendo a esperar 3 pérdidas")
                     self.history_window.append(color)
                     return
                 else:
                     self.on_result(f"❌ LOSS", False)
                     self.total_losses += 1
+                    # PERDIÓ → Seguir en modo peak
                     self.in_peak_mode = True
                     self.waiting_for_losses = False
                     self.pending_bet = None
         
-        # Agregar el nuevo color al historial
-        if len(self.history_window) == 0 or self.history_window[-1] != color:
-            self.history_window.append(color)
+        # ============================================
+        # 2. AGREGAR COLOR AL HISTORIAL
+        # ============================================
+        self.history_window.append(color)
         
-        # LÓGICA PEAK BREAK
+        # ============================================
+        # 3. LÓGICA PEAK BREAK
+        # ============================================
+        
+        # MODO 1: Esperando 3 pérdidas consecutivas
         if self.waiting_for_losses:
             if len(self.history_window) >= 2:
-                ultimo_color = self.history_window[-1]
-                anterior_color = self.history_window[-2]
-                
-                if anterior_color != ultimo_color:
+                anterior = self.history_window[-2]
+                if anterior != color:
                     self.consecutive_losses_count += 1
                     if self.on_prediction:
-                        self.on_prediction(f"⛰️ PEAK BREAK: Pérdida detectada {self.consecutive_losses_count}/3")
+                        self.on_prediction(f"⛰️ PEAK BREAK: Pérdida {self.consecutive_losses_count}/3")
                 else:
-                    if self.consecutive_losses_count > 0:
-                        self.consecutive_losses_count = 0
-                        if self.on_prediction:
-                            self.on_prediction(f"⛰️ PEAK BREAK: Ganancia detectada - Contador reiniciado")
+                    self.consecutive_losses_count = 0
             
             if self.consecutive_losses_count >= 3:
                 self.waiting_for_losses = False
                 self.in_peak_mode = True
                 self.consecutive_losses_count = 0
+                
+                # Usar lógica HACK para la primera apuesta
                 prediction = self._calcular_senal()
                 pred_emoji = "🔴" if prediction == 'red' else "🔵"
+                logica = self._obtener_logica_usada()
+                
                 if self.on_prediction:
                     self.on_prediction(f"⛰️ 🔥 PEAK BREAK ACTIVADO - 3 pérdidas consecutivas!")
-                    self.on_prediction(f"🎯 APOSTAR: {pred_emoji}")
+                    self.on_prediction(f"🎯 APOSTAR ({logica}): {pred_emoji}")
+                
                 self.pending_bet = prediction
             return
         
+        # MODO 2: En peak mode (seguimiento - usa lógica HACK)
         if self.in_peak_mode:
             prediction = self._calcular_senal()
             pred_emoji = "🔴" if prediction == 'red' else "🔵"
+            logica = self._obtener_logica_usada()
+            
             if self.on_prediction:
-                self.on_prediction(f"⛰️ PEAK BREAK (seguimiento): {pred_emoji}")
+                self.on_prediction(f"⛰️ PEAK BREAK (seguimiento - {logica}): {pred_emoji}")
+            
             self.pending_bet = prediction
 
 # ==================== POLLING GLOBAL ====================
@@ -1198,16 +1232,21 @@ class PredictionBot:
         self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_any_photo))
         
         print("=" * 50)
-        print("🤖 HACK PREDICTOR BOT V2 - CON TAKE PROFIT")
+        print("🤖 HACK PREDICTOR BOT V2 - LÓGICA DEFINITIVA")
         print("=" * 50)
-        print("💰 PLANES ACTUALIZADOS:")
+        print("💰 PLANES:")
         print("  • Hack 30d: 15 USDT (1 cuenta)")
         print("  • Multiuser 30d: 75 USDT (5 cuentas)")
         print("  • Peak Break 30d: 35 USDT (1 cuenta)")
         print("=" * 50)
-        print("🎯 FUNCIONES:")
+        print("🎯 LÓGICA HACK (orden correcto):")
+        print("  1º BASE: Seguir el color que sale")
+        print("  2º ALTERNANCIA: 3 colores alternados (🔴🔵🔴 o 🔵🔴🔵)")
+        print("  3º RUPTURA: 4 colores (venía alternando y 2 iguales)")
+        print("=" * 50)
+        print("🎯 OTRAS FUNCIONES:")
         print("  • Take Profit (monto fijo por cuenta)")
-        print("  • Peak Break CORREGIDO: después de WIN, espera 3 pérdidas")
+        print("  • Peak Break: después de WIN, espera 3 pérdidas")
         print("=" * 50)
         print("✅ BOT LISTO")
         print("=" * 50)
