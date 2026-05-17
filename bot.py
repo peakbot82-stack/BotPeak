@@ -1,6 +1,7 @@
 # bot.py - HACK PREDICTOR BOT (VERSIÓN DEFINITIVA)
 # PRECIOS: HACK=15, PEAK BREAK=35, MULTIUSER=75
-# LÓGICA HACK: BASE (seguir color) → ALTERNANCIA (3 colores) → RUPTURA (4 colores)
+# LÓGICA HACK: BASE → ALTERNANCIA (3 colores) → RUPTURA (4 colores)
+# PEAK BREAK: Activación con 2 pérdidas, pausa tras 2 pérdidas internas, reactivación con misma cantidad
 
 import json
 import os
@@ -21,8 +22,9 @@ ADMIN_IDS = [5541162744]
 ADMIN_GROUP_ID = -1002513713257
 MY_WALLET_BEP20 = "0x621917958C7ac81190e9f876C23D6B9914f31263"
 
-# IMAGEN DE WIN
+# IMAGENES
 WIN_IMAGE_URL = "https://i.postimg.cc/T2pH8v1q/1777831023149.png"
+TAKE_PROFIT_IMAGE_URL = "https://i.postimg.cc/Pf88n71y/1778974518057.png"
 
 # ==================== PLANES DE LICENCIA ====================
 LICENSE_PLANS = {
@@ -204,7 +206,7 @@ class HackAccount(UserAccount):
     def get_status(self) -> str:
         return f"💰 ${self.balance:.2f}"
 
-# ==================== PREDICTOR HACK (LÓGICA CORREGIDA: BASE → ALTERNANCIA → RUPTURA) ====================
+# ==================== PREDICTOR HACK ====================
 class HackPredictor:
     def __init__(self, user_id: int):
         self.user_id = user_id
@@ -215,7 +217,6 @@ class HackPredictor:
         self.pending_bet = None
         self.on_prediction = None
         self.on_result = None
-        self.estaba_en_alternancia = False  # Para saber si veníamos de alternancia
     
     def _detectar_alternancia(self) -> bool:
         """Detecta si los últimos 3 colores alternan (ej: 🔴🔵🔴 o 🔵🔴🔵)"""
@@ -229,7 +230,6 @@ class HackPredictor:
         if len(self.history_window) < 4:
             return False
         ultimos_4 = list(self.history_window)[-4:]
-        # Últimos 2 son iguales Y los 3 anteriores alternaban
         return (ultimos_4[-2] == ultimos_4[-1] and 
                 ultimos_4[0] != ultimos_4[1] and 
                 ultimos_4[1] != ultimos_4[2])
@@ -240,23 +240,16 @@ class HackPredictor:
         
         ultimo = self.history_window[-1]
         
-        # 1º BASE: Por defecto, seguir el color (CONTINUIDAD)
-        # Esto es lo que pasa la mayor parte del tiempo
-        
-        # 2º ¿Hay ALTERNANCIA? (3 colores alternados)
+        # 1º BASE: Por defecto, seguir el color
+        # 2º ¿Hay ALTERNANCIA?
         if self._detectar_alternancia():
-            self.estaba_en_alternancia = True
-            # Predecir el contrario para seguir alternando
             return 'blue' if ultimo == 'red' else 'red'
         
-        # 3º ¿Hay RUPTURA? (se rompió la alternancia)
+        # 3º ¿Hay RUPTURA?
         if self._detectar_ruptura():
-            self.estaba_en_alternancia = False
-            # Predecir el contrario (por la ruptura)
             return 'blue' if ultimo == 'red' else 'red'
         
-        # Si no hay ni alternancia ni ruptura → BASE
-        self.estaba_en_alternancia = False
+        # BASE: seguir el color
         return ultimo
     
     def _obtener_logica_usada(self) -> str:
@@ -310,20 +303,25 @@ class HackPredictor:
         self.pending_bet = None
         self.total_wins = 0
         self.total_losses = 0
-        self.estaba_en_alternancia = False
 
-# ==================== PREDICTOR PEAK BREAK ====================
+# ==================== PREDICTOR PEAK BREAK (ACTIVACIÓN 2 LOSS + PAUSA TRAS 2 LOSS) ====================
 class PeakBreakPredictor(HackPredictor):
     """
-    Modo Peak Break: Solo apuesta después de 3 pérdidas consecutivas.
-    Cuando gana, se desactiva y vuelve a esperar 3 pérdidas.
-    Cuando pierde, sigue apostando en cada ronda hasta ganar.
+    Modo Peak Break: 
+    - Se activa después de 2 pérdidas consecutivas del juego
+    - Apuesta hasta tener 2 pérdidas internas (sus apuestas)
+    - Después de 2 pérdidas internas → PAUSA
+    - Se reactiva después de 2 nuevas pérdidas del juego
+    - Continúa con la misma cantidad de apuesta congelada
     """
     def __init__(self, user_id: int):
         super().__init__(user_id)
-        self.consecutive_losses_count = 0
-        self.waiting_for_losses = True
-        self.in_peak_mode = False
+        self.consecutive_losses_count = 0      # Pérdidas del juego para activar
+        self.internal_losses_count = 0         # Pérdidas de sus apuestas
+        self.waiting_for_losses = True         # Esperando activación
+        self.in_peak_mode = False              # Modo activo apostando
+        self.is_paused = False                 # Modo pausa (2 pérdidas internas)
+        self.frozen_bet = 0.0                  # Apuesta congelada durante pausa
     
     def process_color(self, color: str):
         if not self.active:
@@ -332,9 +330,9 @@ class PeakBreakPredictor(HackPredictor):
         color = self._normalizar_color(color)
         
         # ============================================
-        # 1. VERIFICAR RESULTADO DE APUESTA ANTERIOR
+        # 1. VERIFICAR RESULTADO DE APUESTA ANTERIOR (si estábamos apostando)
         # ============================================
-        if self.pending_bet is not None:
+        if self.pending_bet is not None and self.in_peak_mode and not self.is_paused:
             is_win = (self.pending_bet == color)
             
             if self.on_result:
@@ -345,18 +343,30 @@ class PeakBreakPredictor(HackPredictor):
                     self.in_peak_mode = False
                     self.waiting_for_losses = True
                     self.consecutive_losses_count = 0
+                    self.internal_losses_count = 0
+                    self.is_paused = False
+                    self.frozen_bet = 0.0
                     self.pending_bet = None
                     if self.on_prediction:
-                        self.on_prediction(f"⛰️ PEAK BREAK: WIN - Volviendo a esperar 3 pérdidas")
+                        self.on_prediction(f"⛰️ PEAK BREAK: WIN - Volviendo a esperar 2 pérdidas")
                     self.history_window.append(color)
                     return
                 else:
                     self.on_result(f"❌ LOSS", False)
                     self.total_losses += 1
-                    # PERDIÓ → Seguir en modo peak
-                    self.in_peak_mode = True
-                    self.waiting_for_losses = False
+                    self.internal_losses_count += 1
                     self.pending_bet = None
+                    
+                    # ¿Alcanzamos 2 pérdidas internas?
+                    if self.internal_losses_count >= 2:
+                        # 🛑 PAUSA - Congelar ciclo
+                        self.is_paused = True
+                        self.in_peak_mode = False
+                        self.frozen_bet = None  # Marcamos que hay una apuesta congelada
+                        if self.on_prediction:
+                            self.on_prediction(f"🛑 PEAK BREAK: PAUSA - 2 pérdidas consecutivas. Apuesta congelada. Esperando nuevas 2 pérdidas del juego.")
+                        self.history_window.append(color)
+                        return
         
         # ============================================
         # 2. AGREGAR COLOR AL HISTORIAL
@@ -367,36 +377,50 @@ class PeakBreakPredictor(HackPredictor):
         # 3. LÓGICA PEAK BREAK
         # ============================================
         
-        # MODO 1: Esperando 3 pérdidas consecutivas
+        # MODO ESPERA (buscando 2 pérdidas del juego para activar o reactivar)
         if self.waiting_for_losses:
             if len(self.history_window) >= 2:
                 anterior = self.history_window[-2]
                 if anterior != color:
                     self.consecutive_losses_count += 1
                     if self.on_prediction:
-                        self.on_prediction(f"⛰️ PEAK BREAK: Pérdida {self.consecutive_losses_count}/3")
+                        self.on_prediction(f"⛰️ PEAK BREAK: Pérdida {self.consecutive_losses_count}/2 para activar")
                 else:
                     self.consecutive_losses_count = 0
             
-            if self.consecutive_losses_count >= 3:
+            # ¿Alcanzamos 2 pérdidas?
+            if self.consecutive_losses_count >= 2:
                 self.waiting_for_losses = False
-                self.in_peak_mode = True
-                self.consecutive_losses_count = 0
                 
-                # Usar lógica HACK para la primera apuesta
+                # Verificar si venimos de una pausa (reactivación)
+                if self.is_paused:
+                    self.in_peak_mode = True
+                    self.is_paused = False
+                    self.consecutive_losses_count = 0
+                    self.internal_losses_count = 0
+                    # La apuesta sigue siendo la misma (ya está en current_bet)
+                    if self.on_prediction:
+                        self.on_prediction(f"⛰️ 🔥 PEAK BREAK REACTIVADO - Continuando ciclo congelado")
+                else:
+                    self.in_peak_mode = True
+                    self.consecutive_losses_count = 0
+                    self.internal_losses_count = 0
+                    if self.on_prediction:
+                        self.on_prediction(f"⛰️ 🔥 PEAK BREAK ACTIVADO - 2 pérdidas consecutivas!")
+                
+                # Generar señal usando lógica HACK
                 prediction = self._calcular_senal()
                 pred_emoji = "🔴" if prediction == 'red' else "🔵"
                 logica = self._obtener_logica_usada()
                 
                 if self.on_prediction:
-                    self.on_prediction(f"⛰️ 🔥 PEAK BREAK ACTIVADO - 3 pérdidas consecutivas!")
                     self.on_prediction(f"🎯 APOSTAR ({logica}): {pred_emoji}")
                 
                 self.pending_bet = prediction
             return
         
-        # MODO 2: En peak mode (seguimiento - usa lógica HACK)
-        if self.in_peak_mode:
+        # MODO ACTIVO (apostando - usa lógica HACK)
+        if self.in_peak_mode and not self.is_paused:
             prediction = self._calcular_senal()
             pred_emoji = "🔴" if prediction == 'red' else "🔵"
             logica = self._obtener_logica_usada()
@@ -519,6 +543,15 @@ class PredictionBot:
     def _sync_send_win_image(self, user_id: int):
         asyncio.run_coroutine_threadsafe(self._send_win_image(user_id), self.loop)
     
+    async def _send_take_profit_image(self, user_id: int):
+        try:
+            await self.application.bot.send_photo(chat_id=user_id, photo=TAKE_PROFIT_IMAGE_URL, caption="🎯 TAKE PROFIT ALCANZADO")
+        except:
+            await self._send_message(user_id, "🎯 TAKE PROFIT ALCANZADO")
+    
+    def _sync_send_take_profit_image(self, user_id: int):
+        asyncio.run_coroutine_threadsafe(self._send_take_profit_image(user_id), self.loop)
+    
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         license_check = self.license_manager.check_license(user_id)
@@ -534,7 +567,7 @@ class PredictionBot:
                 "💰 PLANES DISPONIBLES:\n"
                 "• 🔧 Hack 30d: 15 USDT (1 cuenta, apuesta en cada señal)\n"
                 "• 👥 Multiuser 30d: 75 USDT (5 cuentas, apuesta en cada señal)\n"
-                "• ⛰️ Peak Break 30d: 35 USDT (1 cuenta, apuesta tras 3 pérdidas)\n\n"
+                "• ⛰️ Peak Break 30d: 35 USDT (1 cuenta, apuesta tras 2 pérdidas)\n\n"
                 "Selecciona una opción:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
@@ -545,7 +578,7 @@ class PredictionBot:
         max_accounts = license_data.get('max_users', 1)
         mode = license_data.get('mode', 'hack')
         
-        modo_texto = "⚡ HACK (apuesta en cada señal)" if mode == "hack" else "⛰️ PEAK BREAK (espera 3 pérdidas)"
+        modo_texto = "⚡ HACK (apuesta en cada señal)" if mode == "hack" else "⛰️ PEAK BREAK (espera 2 pérdidas, pausa tras 2 loss)"
         
         keyboard = [
             [InlineKeyboardButton("📡 MODO SEÑALES", callback_data='signals_mode')],
@@ -746,6 +779,7 @@ class PredictionBot:
                     account.betting_active = False
                     profit_info = account.get_profit_info()
                     self._sync_send_message(user_id, f"🎯 ¡TAKE PROFIT ALCANZADO! {account.username}\n{profit_info}\n🛑 Apuestas detenidas para esta cuenta")
+                    self._sync_send_take_profit_image(user_id)
             else:
                 account.losses += 1
                 if account.consecutive_losses + 1 >= account.max_consecutive_losses:
@@ -781,7 +815,7 @@ class PredictionBot:
         else:
             tp_display = f"${take_profit_val}"
         
-        modo_texto = "⚡ HACK (apuesta en cada señal)" if bot_mode == "hack" else "⛰️ PEAK BREAK (espera 3 pérdidas, luego apuesta hasta ganar)"
+        modo_texto = "⚡ HACK (apuesta en cada señal)" if bot_mode == "hack" else "⛰️ PEAK BREAK (espera 2 pérdidas, pausa tras 2 loss)"
         
         keyboard = [
             [InlineKeyboardButton(f"💰 Inicial: ${config['initial_bet']}", callback_data='cfg_initial')],
@@ -945,7 +979,7 @@ class PredictionBot:
         self.user_sessions[user_id]['auto_betting_active'] = True
         
         modo_texto = "Martingala (x2)" if config['use_martingale'] else "Agresivo (x2+inicial)"
-        estrategia_texto = "PEAK BREAK (espera 3 pérdidas)" if bot_mode == "peakbreak" else "HACK (apuesta en cada señal)"
+        estrategia_texto = "PEAK BREAK (espera 2 pérdidas, pausa tras 2 loss)" if bot_mode == "peakbreak" else "HACK (apuesta en cada señal)"
         tp_texto = f"${take_profit_amount}" if take_profit_amount > 0 else "DESACTIVADO"
         
         await update.callback_query.edit_message_text(
@@ -1099,7 +1133,7 @@ class PredictionBot:
             expiry = datetime.fromisoformat(data['expiry'])
             days = (expiry - datetime.now()).days
             mode = data.get('mode', 'hack')
-            modo_texto = "HACK (apuesta en cada señal)" if mode == "hack" else "PEAK BREAK (espera 3 pérdidas)"
+            modo_texto = "HACK (apuesta en cada señal)" if mode == "hack" else "PEAK BREAK (espera 2 pérdidas)"
             await query.edit_message_text(
                 f"📜 INFORMACIÓN DE LICENCIA\n\n"
                 f"📋 Plan: {LICENSE_PLANS[data['plan']]['name']}\n"
@@ -1232,21 +1266,28 @@ class PredictionBot:
         self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_any_photo))
         
         print("=" * 50)
-        print("🤖 HACK PREDICTOR BOT V2 - LÓGICA DEFINITIVA")
+        print("🤖 HACK PREDICTOR BOT V2 - VERSIÓN FINAL")
         print("=" * 50)
         print("💰 PLANES:")
         print("  • Hack 30d: 15 USDT (1 cuenta)")
         print("  • Multiuser 30d: 75 USDT (5 cuentas)")
         print("  • Peak Break 30d: 35 USDT (1 cuenta)")
         print("=" * 50)
-        print("🎯 LÓGICA HACK (orden correcto):")
-        print("  1º BASE: Seguir el color que sale")
-        print("  2º ALTERNANCIA: 3 colores alternados (🔴🔵🔴 o 🔵🔴🔵)")
-        print("  3º RUPTURA: 4 colores (venía alternando y 2 iguales)")
+        print("🎯 LÓGICA HACK:")
+        print("  • BASE: Seguir el color que sale")
+        print("  • ALTERNANCIA: 3 colores alternados (🔴🔵🔴)")
+        print("  • RUPTURA: 4 colores (🔴🔵🔴🔴)")
         print("=" * 50)
-        print("🎯 OTRAS FUNCIONES:")
-        print("  • Take Profit (monto fijo por cuenta)")
-        print("  • Peak Break: después de WIN, espera 3 pérdidas")
+        print("🎯 PEAK BREAK:")
+        print("  • Activación: 2 pérdidas del juego")
+        print("  • Pausa: después de 2 pérdidas internas")
+        print("  • Reactivación: 2 nuevas pérdidas del juego")
+        print("  • Continuación: con la misma cantidad congelada")
+        print("=" * 50)
+        print("🎯 TAKE PROFIT:")
+        print("  • Monto fijo por cuenta")
+        print("  • Imagen especial al alcanzarlo")
+        print("  • Se detiene automáticamente")
         print("=" * 50)
         print("✅ BOT LISTO")
         print("=" * 50)
