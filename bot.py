@@ -304,7 +304,7 @@ class HackPredictor:
         self.total_wins = 0
         self.total_losses = 0
 
-# ==================== PREDICTOR PEAK BREAK (ACTIVACIÓN 2 LOSS + PAUSA TRAS 2 LOSS) ====================
+# ==================== PREDICTOR PEAK BREAK (CORREGIDO - REACTIVACIÓN FUNCIONAL) ====================
 class PeakBreakPredictor(HackPredictor):
     """
     Modo Peak Break: 
@@ -361,8 +361,8 @@ class PeakBreakPredictor(HackPredictor):
                     if self.internal_losses_count >= 2:
                         # 🛑 PAUSA - Congelar ciclo
                         self.is_paused = True
+                        self.waiting_for_losses = True  # ⭐ CLAVE: Volver a esperar pérdidas del juego
                         self.in_peak_mode = False
-                        self.frozen_bet = None  # Marcamos que hay una apuesta congelada
                         if self.on_prediction:
                             self.on_prediction(f"🛑 PEAK BREAK: PAUSA - 2 pérdidas consecutivas. Apuesta congelada. Esperando nuevas 2 pérdidas del juego.")
                         self.history_window.append(color)
@@ -378,6 +378,7 @@ class PeakBreakPredictor(HackPredictor):
         # ============================================
         
         # MODO ESPERA (buscando 2 pérdidas del juego para activar o reactivar)
+        # Esto aplica tanto si estamos en espera normal como en pausa
         if self.waiting_for_losses:
             if len(self.history_window) >= 2:
                 anterior = self.history_window[-2]
@@ -398,7 +399,6 @@ class PeakBreakPredictor(HackPredictor):
                     self.is_paused = False
                     self.consecutive_losses_count = 0
                     self.internal_losses_count = 0
-                    # La apuesta sigue siendo la misma (ya está en current_bet)
                     if self.on_prediction:
                         self.on_prediction(f"⛰️ 🔥 PEAK BREAK REACTIVADO - Continuando ciclo congelado")
                 else:
@@ -1278,7 +1278,7 @@ class PredictionBot:
         print("  • ALTERNANCIA: 3 colores alternados (🔴🔵🔴)")
         print("  • RUPTURA: 4 colores (🔴🔵🔴🔴)")
         print("=" * 50)
-        print("🎯 PEAK BREAK:")
+        print("🎯 PEAK BREAK (CORREGIDO):")
         print("  • Activación: 2 pérdidas del juego")
         print("  • Pausa: después de 2 pérdidas internas")
         print("  • Reactivación: 2 nuevas pérdidas del juego")
