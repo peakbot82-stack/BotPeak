@@ -556,17 +556,15 @@ class EscaladaPredictor(HackPredictor):
     """
     def __init__(self, user_id: int):
         super().__init__(user_id)
-        self.nivel = 1  # Nivel actual (1, 2 o 3)
-        self.perdidas_acumuladas = 0  # Pérdidas del juego en el nivel actual
-        self.waiting_for_activation = True  # Esperando alcanzar el umbral
-        self.apuesta_realizada = False  # Ya se apostó en este ciclo de activación
+        self.nivel = 1
+        self.perdidas_acumuladas = 0
+        self.waiting_for_activation = True
+        self.apuesta_realizada = False
     
     def _obtener_umbral_actual(self) -> int:
-        """Devuelve cuántas pérdidas necesita el nivel actual"""
         return self.nivel
     
     def _reset_ciclo_actual(self):
-        """Reinicia el contador de pérdidas del juego para el nivel actual"""
         self.perdidas_acumuladas = 0
         self.waiting_for_activation = True
         self.apuesta_realizada = False
@@ -577,9 +575,6 @@ class EscaladaPredictor(HackPredictor):
         
         color = self._normalizar_color(color)
         
-        # ============================================
-        # 1. VERIFICAR RESULTADO DE APUESTA ANTERIOR
-        # ============================================
         if self.pending_bet is not None:
             is_win = (self.pending_bet == color)
             
@@ -587,55 +582,41 @@ class EscaladaPredictor(HackPredictor):
                 if is_win:
                     self.on_result(f"✅ WIN", True)
                     self.total_wins += 1
-                    # 🟢 GANÓ: Se queda en el MISMO nivel
                     if self.on_prediction:
                         self.on_prediction(f"📈 ESCALADA Nivel {self.nivel}: WIN! Sigo en nivel {self.nivel}")
-                    # Reiniciar contadores para el mismo nivel
                     self._reset_ciclo_actual()
                 else:
                     self.on_result(f"❌ LOSS", False)
                     self.total_losses += 1
-                    # 🔴 PERDIÓ: Sube de nivel o reinicia si está en nivel 3
                     if self.nivel < 3:
                         self.nivel += 1
                         if self.on_prediction:
                             self.on_prediction(f"📈 ESCALADA: LOSS! Subo a NIVEL {self.nivel} (necesita {self.nivel} pérdidas para activar)")
                     else:
-                        # Nivel 3 y perdió → Reiniciar a nivel 1
                         self.nivel = 1
                         if self.on_prediction:
                             self.on_prediction(f"📈 ESCALADA: LOSS en nivel 3! Reinicio a NIVEL 1")
-                    # Reiniciar contadores para el nuevo nivel
                     self._reset_ciclo_actual()
             
             self.pending_bet = None
             self.history_window.append(color)
             return
         
-        # ============================================
-        # 2. AGREGAR COLOR AL HISTORIAL
-        # ============================================
         self.history_window.append(color)
         
-        # ============================================
-        # 3. LÓGICA ESCALADA - ESPERANDO ACTIVACIÓN
-        # ============================================
         if self.waiting_for_activation and not self.apuesta_realizada:
-            # Detectar pérdidas del juego
             if len(self.history_window) >= 2:
                 anterior = self.history_window[-2]
-                if anterior != color:  # ¡PÉRDIDA DETECTADA!
+                if anterior != color:
                     self.perdidas_acumuladas += 1
                     if self.on_prediction:
                         self.on_prediction(f"📈 ESCALADA Nivel {self.nivel}: Pérdida {self.perdidas_acumuladas}/{self._obtener_umbral_actual()}")
             
-            # ¿Alcanzamos el umbral?
             if self.perdidas_acumuladas >= self._obtener_umbral_actual() and not self.apuesta_realizada:
                 self.waiting_for_activation = False
                 self.apuesta_realizada = True
                 self.perdidas_acumuladas = 0
                 
-                # Generar señal usando lógica HACK
                 prediction = self._calcular_senal()
                 pred_emoji = "🔴" if prediction == 'red' else "🔵"
                 logica = self._obtener_logica_usada()
@@ -816,7 +797,7 @@ class PredictionBot:
         if mode == "hack":
             modo_texto = "⚡ HACK (apuesta en cada señal)"
         elif mode == "ghost":
-            modo_texto =👻 " GHOST (apuesta SOLO en ruptura, espera durante alternancia)"
+            modo_texto = "👻 GHOST (apuesta SOLO en ruptura, espera durante alternancia)"
         elif mode == "peakbreak":
             modo_texto = "⛰️ PEAK BREAK AGRESIVO (espera 2 pérdidas, pausa tras 1 loss)"
         elif mode == "anonimus":
@@ -1111,13 +1092,11 @@ class PredictionBot:
             [InlineKeyboardButton("◀️ Volver", callback_data='back_to_start')]
         ]
         
-        tp_texto = "DESACTIVADO" if config.get('take_profit', 0) == 0 else f"${config.get('take_profit', 0)}"
-        
         msg = (f"⚙️ CONFIGURACIÓN\n\n"
                f"🎲 Estrategia del bot: {modo_texto}\n"
                f"💰 Apuesta actual: ${config['current_bet']}\n"
                f"🎲 Modo gestión: {'Martingala (x2)' if config['use_martingale'] else 'Agresivo (x2+inicial)'}\n"
-               f"🎯 Take Profit: {tp_texto}\n\n"
+               f"🎯 Take Profit: {tp_display}\n\n"
                f"Ejemplo con $0.10 inicial:\n"
                f"• Martingala: 0.10 → 0.20 → 0.40 → 0.80\n"
                f"• Agresivo: 0.10 → 0.30 → 0.70 → 1.50")
@@ -1501,7 +1480,6 @@ class PredictionBot:
                 plan_name = LICENSE_PLANS[plan]['name']
                 await update.message.reply_text(f"✅ Licencia '{plan_name}' activada para usuario {target_user_id}")
                 
-                modo_texto = ""
                 if plan == "hack":
                     modo_texto = "HACK (apuesta en cada señal)"
                 elif plan == "ghost":
