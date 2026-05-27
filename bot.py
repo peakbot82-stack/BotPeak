@@ -1,11 +1,11 @@
-# bot.py - HACK PREDICTOR BOT (VERSIÓN COMPLETA CON GHOST + ANÓNIMUS + ESCALADA)
+# bot.py - HACK PREDICTOR BOT (VERSIÓN COMPLETA CON GHOST + ANÓNIMUS + ESCALADA V2)
 # PRECIOS: HACK=15, GHOST=18, MULTIUSER=75, PEAK BREAK=35, ANÓNIMUS=15, ESCALADA=45
 # DURACIONES: PEAK BREAK=60 días, ESCALADA=30 días, resto=30 días
 # LÓGICA HACK: BASE → ALTERNANCIA (3 colores) → RUPTURA (4 colores)
 # LÓGICA GHOST: SOLO APUESTA EN RUPTURA, espera durante alternancia
 # LÓGICA PEAK BREAK: 2 pérdidas activan → apuesta hasta 1 loss → pausa
 # LÓGICA ANÓNIMUS: 1 pérdida activa → 1 apuesta → reinicio
-# LÓGICA ESCALADA: WIN=apuesta inmediata+reinicio N1, LOSS=sube nivel(1→2→3)
+# LÓGICA ESCALADA V2: WIN=HACK+apuesta inmediata+reinicio N1, LOSS=BASE+sube nivel(1→2→3→1)
 
 import json
 import os
@@ -37,7 +37,7 @@ LICENSE_PLANS = {
     "multiuser": {"price": 75, "days": 30, "mode": "hack", "max_users": 5, "name": "👥 Multiuser 30 Días"},
     "peakbreak": {"price": 35, "days": 60, "mode": "peakbreak", "max_users": 1, "name": "⛰️ Peak Break 60 Días"},
     "anonimus": {"price": 15, "days": 30, "mode": "anonimus", "max_users": 1, "name": "🕵️ Anónimus 30 Días"},
-    "escalada": {"price": 45, "days": 30, "mode": "escalada", "max_users": 1, "name": "📈 Escalada 30 Días"},
+    "escalada": {"price": 45, "days": 30, "mode": "escalada", "max_users": 1, "name": "📈 Escalada V2 30 Días"},
 }
 
 # ==================== LICENCIA MANAGER ====================
@@ -540,14 +540,15 @@ class AnonimusPredictor(HackPredictor):
         self.waiting_for_activation = True
         self.has_bet_this_cycle = False
 
-# ==================== PREDICTOR ESCALADA (CORREGIDO) ====================
+# ==================== PREDICTOR ESCALADA V2 (CORREGIDO - SIN ALTERNANCIA EN LOSS) ====================
 class EscaladaPredictor(HackPredictor):
     """
-    Modo Escalada:
-    - WIN: Apuesta siguiente ronda + Reinicia a NIVEL 1
-    - LOSS Nivel 1: Sube a Nivel 2 (espera 2 pérdidas)
-    - LOSS Nivel 2: Sube a Nivel 3 (espera 3 pérdidas)
-    - LOSS Nivel 3: Se queda en Nivel 3 (espera 3 pérdidas)
+    Modo Escalada V2 CORREGIDO:
+    - Modo LOSS (esperando pérdidas): Estrategia SOLO BASE (seguir color) en TODOS los niveles
+    - Modo WIN (apuesta inmediata post-ganancia): Estrategia HACK completa
+    - Nivel 1: espera 1 pérdida
+    - Nivel 2: espera 2 pérdidas
+    - Nivel 3: espera 3 pérdidas (si pierde reinicia a Nivel 1)
     """
     def __init__(self, user_id: int):
         super().__init__(user_id)
@@ -556,6 +557,46 @@ class EscaladaPredictor(HackPredictor):
         self.waiting_for_activation = True
         self.apuesta_realizada = False
         self.apuesta_inmediata_pendiente = False
+        self.usando_estrategia_hack = False  # False = modo LOSS (BASE), True = modo WIN (HACK)
+    
+    def _calcular_senal_hack(self) -> str:
+        """Lógica HACK completa (solo cuando estamos en modo WIN)"""
+        if len(self.history_window) == 0:
+            return 'red'
+        
+        ultimo = self.history_window[-1]
+        
+        if self._detectar_alternancia():
+            return 'blue' if ultimo == 'red' else 'red'
+        
+        if self._detectar_ruptura():
+            return 'blue' if ultimo == 'red' else 'red'
+        
+        return ultimo
+    
+    def _calcular_senal_base(self) -> str:
+        """Estrategia SOLO BASE: seguir el color (usado en modo LOSS, TODOS los niveles)"""
+        if len(self.history_window) == 0:
+            return 'red'
+        # Solo el último color, SIN alternancia ni ruptura
+        return self.history_window[-1]
+    
+    def _calcular_senal(self) -> str:
+        """Elige estrategia según el modo actual"""
+        if self.usando_estrategia_hack:
+            return self._calcular_senal_hack()
+        else:
+            return self._calcular_senal_base()
+    
+    def _obtener_logica_usada(self) -> str:
+        if self.usando_estrategia_hack:
+            if self._detectar_ruptura():
+                return "HACK-RUPTURA"
+            if self._detectar_alternancia():
+                return "HACK-ALTERNANCIA"
+            return "HACK-BASE"
+        else:
+            return "BASE (seguir color)"
     
     def _obtener_umbral_actual(self) -> int:
         return self.nivel
@@ -581,28 +622,32 @@ class EscaladaPredictor(HackPredictor):
                 if is_win:
                     self.on_result(f"✅ WIN", True)
                     self.total_wins += 1
-                    # WIN: Reinicia a NIVEL 1 + apuesta inmediata siguiente ronda
+                    # WIN: Cambia a modo HACK + Reinicia Nivel 1 + apuesta inmediata
                     self.nivel = 1
+                    self.usando_estrategia_hack = True
                     self.apuesta_inmediata_pendiente = True
                     if self.on_prediction:
-                        self.on_prediction(f"📈 ESCALADA: WIN! Reinicio a NIVEL 1 - Apostaré en la siguiente ronda")
+                        self.on_prediction(f"📈 ESCALADA: WIN! Cambio a modo HACK, reinicio a NIVEL 1 - Apostaré en siguiente ronda")
                 else:
                     self.on_result(f"❌ LOSS", False)
                     self.total_losses += 1
-                    # LOSS: Sube de nivel o se queda
+                    # LOSS: Cambia a modo BASE (seguir color) para TODOS los niveles
+                    self.usando_estrategia_hack = False
+                    # LOSS: Sube de nivel o reinicia a nivel 1 si está en nivel 3
                     if self.nivel < 3:
                         self.nivel += 1
                         if self.on_prediction:
-                            self.on_prediction(f"📈 ESCALADA: LOSS! Subo a NIVEL {self.nivel} (necesita {self.nivel} pérdidas)")
+                            self.on_prediction(f"📈 ESCALADA: LOSS! Cambio a modo BASE, subo a NIVEL {self.nivel} (necesita {self.nivel} pérdidas)")
                     else:
+                        self.nivel = 1
                         if self.on_prediction:
-                            self.on_prediction(f"📈 ESCALADA: LOSS en NIVEL 3 - Me quedo en NIVEL 3")
+                            self.on_prediction(f"📈 ESCALADA: LOSS en NIVEL 3! Reinicio a NIVEL 1 y modo BASE")
             
             self.pending_bet = None
             self._reset_ciclo_actual()
             self.history_window.append(color)
             
-            # Si hay apuesta inmediata pendiente, generarla ahora
+            # Si hay apuesta inmediata pendiente (por WIN), generarla ahora
             if self.apuesta_inmediata_pendiente:
                 self.apuesta_inmediata_pendiente = False
                 prediction = self._calcular_senal()
@@ -619,9 +664,9 @@ class EscaladaPredictor(HackPredictor):
         self.history_window.append(color)
         
         # ============================================
-        # 3. LÓGICA ESCALADA - ESPERANDO ACTIVACIÓN
+        # 3. LÓGICA ESCALADA - ESPERANDO ACTIVACIÓN (solo en modo BASE)
         # ============================================
-        if self.waiting_for_activation and not self.apuesta_realizada and not self.apuesta_inmediata_pendiente:
+        if not self.usando_estrategia_hack and self.waiting_for_activation and not self.apuesta_realizada and not self.apuesta_inmediata_pendiente:
             # Detectar pérdidas del juego
             if len(self.history_window) >= 2:
                 anterior = self.history_window[-2]
@@ -653,6 +698,7 @@ class EscaladaPredictor(HackPredictor):
         self.waiting_for_activation = True
         self.apuesta_realizada = False
         self.apuesta_inmediata_pendiente = False
+        self.usando_estrategia_hack = False
 
 # ==================== POLLING GLOBAL ====================
 class GlobalPolling:
@@ -793,7 +839,7 @@ class PredictionBot:
                 [InlineKeyboardButton("👥 Multiuser 30d - 75 USDT", callback_data='plan_multiuser')],
                 [InlineKeyboardButton("⛰️ Peak Break 60d - 35 USDT", callback_data='plan_peakbreak')],
                 [InlineKeyboardButton("🕵️ Anónimus 30d - 15 USDT", callback_data='plan_anonimus')],
-                [InlineKeyboardButton("📈 Escalada 30d - 45 USDT", callback_data='plan_escalada')]
+                [InlineKeyboardButton("📈 Escalada V2 30d - 45 USDT", callback_data='plan_escalada')]
             ]
             await update.message.reply_text(
                 "🔒 ACCESO RESTRINGIDO\n\nNo tienes licencia activa.\n\n"
@@ -803,7 +849,7 @@ class PredictionBot:
                 "• 👥 Multiuser 30d: 75 USDT (5 cuentas, apuesta en cada señal)\n"
                 "• ⛰️ Peak Break 60d: 35 USDT (1 cuenta, apuesta tras 2 pérdidas, pausa tras 1 loss)\n"
                 "• 🕵️ Anónimus 30d: 15 USDT (1 cuenta, apuesta 1 vez tras 1 pérdida)\n"
-                "• 📈 Escalada 30d: 45 USDT (1 cuenta, WIN=apuesta inmediata+reinicio N1, LOSS=sube nivel)\n\n"
+                "• 📈 Escalada V2 30d: 45 USDT (1 cuenta, WIN=HACK+apuesta inmediata+reinicio, LOSS=BASE+sube nivel 1→2→3→1)\n\n"
                 "Selecciona una opción:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
@@ -823,7 +869,7 @@ class PredictionBot:
         elif mode == "anonimus":
             modo_texto = "🕵️ ANÓNIMUS (1 pérdida del juego → 1 apuesta)"
         elif mode == "escalada":
-            modo_texto = "📈 ESCALADA (WIN=apuesta inmediata+reinicio N1, LOSS=sube nivel 1→2→3)"
+            modo_texto = "📈 ESCALADA V2 (WIN=HACK+apuesta inmediata+reinicio, LOSS=BASE+sube nivel 1→2→3→1)"
         else:
             modo_texto = "⚡ HACK"
         
@@ -875,7 +921,7 @@ class PredictionBot:
         elif mode == "anonimus":
             modo_nombre = "ANÓNIMUS (1 pérdida → 1 apuesta)"
         elif mode == "escalada":
-            modo_nombre = "ESCALADA (WIN=apuesta inmediata+reinicio, LOSS=sube nivel)"
+            modo_nombre = "ESCALADA V2 (WIN=HACK, LOSS=BASE)"
         else:
             modo_nombre = "HACK"
         
@@ -909,7 +955,7 @@ class PredictionBot:
         elif mode == "anonimus":
             modo_nombre = "ANÓNIMUS (1 pérdida → 1 apuesta)"
         elif mode == "escalada":
-            modo_nombre = "ESCALADA (WIN=apuesta inmediata+reinicio, LOSS=sube nivel)"
+            modo_nombre = "ESCALADA V2 (WIN=HACK, LOSS=BASE)"
         else:
             modo_nombre = "HACK"
         
@@ -1097,7 +1143,7 @@ class PredictionBot:
         elif bot_mode == "anonimus":
             modo_texto = "🕵️ ANÓNIMUS (1 pérdida del juego → 1 apuesta)"
         elif bot_mode == "escalada":
-            modo_texto = "📈 ESCALADA (WIN=apuesta inmediata+reinicio N1, LOSS=sube nivel)"
+            modo_texto = "📈 ESCALADA V2 (WIN=HACK+apuesta inmediata+reinicio, LOSS=BASE+sube nivel)"
         else:
             modo_texto = "⚡ HACK"
         
@@ -1270,7 +1316,7 @@ class PredictionBot:
         elif bot_mode == "anonimus":
             estrategia_texto = "ANÓNIMUS (1 pérdida del juego → 1 apuesta)"
         elif bot_mode == "escalada":
-            estrategia_texto = "ESCALADA (WIN=apuesta inmediata+reinicio N1, LOSS=sube nivel)"
+            estrategia_texto = "ESCALADA V2 (WIN=HACK+apuesta inmediata+reinicio, LOSS=BASE+sube nivel)"
         else:
             estrategia_texto = "HACK"
         
@@ -1312,7 +1358,7 @@ class PredictionBot:
             [InlineKeyboardButton("👥 Multiuser 30d - 75 USDT", callback_data='plan_multiuser')],
             [InlineKeyboardButton("⛰️ Peak Break 60d - 35 USDT", callback_data='plan_peakbreak')],
             [InlineKeyboardButton("🕵️ Anónimus 30d - 15 USDT", callback_data='plan_anonimus')],
-            [InlineKeyboardButton("📈 Escalada 30d - 45 USDT", callback_data='plan_escalada')]
+            [InlineKeyboardButton("📈 Escalada V2 30d - 45 USDT", callback_data='plan_escalada')]
         ]
         await update.callback_query.edit_message_text(
             "💰 COMPRAR LICENCIA\n\nSelecciona un plan:",
@@ -1440,7 +1486,7 @@ class PredictionBot:
             elif mode == "anonimus":
                 modo_texto = "ANÓNIMUS (1 pérdida del juego → 1 apuesta)"
             elif mode == "escalada":
-                modo_texto = "ESCALADA (WIN=apuesta inmediata+reinicio N1, LOSS=sube nivel 1→2→3)"
+                modo_texto = "ESCALADA V2 (WIN=HACK+apuesta inmediata+reinicio, LOSS=BASE+sube nivel 1→2→3→1)"
             else:
                 modo_texto = "HACK"
             
@@ -1483,7 +1529,7 @@ class PredictionBot:
                 "• multiuser - Multiuser 30 días (75 USDT)\n"
                 "• peakbreak - Peak Break 60 días (35 USDT)\n"
                 "• anonimus - Anónimus 30 días (15 USDT)\n"
-                "• escalada - Escalada 30 días (45 USDT)\n\n"
+                "• escalada - Escalada V2 30 días (45 USDT)\n\n"
                 "Ejemplo: /validar 123456789 hack"
             )
             return
@@ -1509,7 +1555,7 @@ class PredictionBot:
                 elif plan == "anonimus":
                     modo_texto = "ANÓNIMUS (1 pérdida → 1 apuesta)"
                 elif plan == "escalada":
-                    modo_texto = "ESCALADA (WIN=apuesta inmediata+reinicio N1, LOSS=sube nivel)"
+                    modo_texto = "ESCALADA V2 (WIN=HACK+apuesta inmediata+reinicio, LOSS=BASE+sube nivel 1→2→3→1)"
                 else:
                     modo_texto = "HACK (multiuser)"
                 
@@ -1600,7 +1646,7 @@ class PredictionBot:
         print("  • Multiuser 30d: 75 USDT (5 cuentas)")
         print("  • Peak Break 60d: 35 USDT (1 cuenta, agresivo 2/1 con pausa)")
         print("  • Anónimus 30d: 15 USDT (1 cuenta, 1 pérdida → 1 apuesta)")
-        print("  • Escalada 30d: 45 USDT (1 cuenta, WIN=apuesta inmediata+reinicio N1, LOSS=sube nivel)")
+        print("  • Escalada V2 30d: 45 USDT (1 cuenta, WIN=HACK+inmediato+reinicio, LOSS=BASE+1→2→3→1)")
         print("=" * 50)
         print("🎯 LÓGICA HACK:")
         print("  • BASE: Seguir el color que sale")
@@ -1622,11 +1668,13 @@ class PredictionBot:
         print("  • Apuesta: SOLO 1 VEZ")
         print("  • Reinicio inmediato del ciclo")
         print("=" * 50)
-        print("📈 ESCALADA:")
-        print("  • WIN: Apuesta inmediata siguiente ronda + Reinicio a NIVEL 1")
+        print("📈 ESCALADA V2:")
+        print("  • Modo LOSS (esperando): Estrategia BASE (seguir color) en TODOS los niveles")
+        print("  • Modo WIN (post-ganancia): Estrategia HACK completa")
+        print("  • WIN: Apuesta inmediata + Reinicio a NIVEL 1")
         print("  • LOSS Nivel 1: Sube a Nivel 2 (espera 2 pérdidas)")
         print("  • LOSS Nivel 2: Sube a Nivel 3 (espera 3 pérdidas)")
-        print("  • LOSS Nivel 3: Se queda en Nivel 3")
+        print("  • LOSS Nivel 3: Reinicia a NIVEL 1")
         print("=" * 50)
         print("🎯 TAKE PROFIT:")
         print("  • Monto fijo por cuenta")
