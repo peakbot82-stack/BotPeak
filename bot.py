@@ -1,6 +1,6 @@
 # bot.py - PREDICTOR BOT (HACK + PEAK BREAK V2 CORREGIDO)
 # HACK: Estrategia #3 Anti-sistema (seguir color + anti tras 2 pérdidas)
-# PEAK BREAK V2: Here de HACK, apuesta tras WIN en la MISMA ronda
+# PEAK BREAK V2: Hereda HACK, detecta WIN/LOSS por predicción real
 
 import json
 import os
@@ -304,13 +304,15 @@ class HackPredictor:
             if self.on_prediction:
                 self.on_prediction(f"🎯 SIGUIENTE: {'🔴' if last_color == 'red' else '🔵'}")
     
-    def get_prediction_for_bet(self) -> str:
-        """Obtiene la predicción actual para apostar"""
-        if self.last_prediction:
-            return self.last_prediction
-        if self.session_history:
-            return self.session_history[-1]
-        return 'red'
+    def get_last_prediction(self) -> str:
+        """Obtiene la última predicción que se hizo"""
+        return self.last_prediction
+    
+    def get_previous_prediction(self) -> str:
+        """Obtiene la predicción anterior (antes de la última)"""
+        if len(self.session_history) >= 2:
+            return self.session_history[-2]
+        return None
     
     def reset(self):
         self.session_history = []
@@ -329,8 +331,8 @@ class PeakBreakPredictorV2:
     ESTRATEGIA PEAK BREAK V2 CORREGIDA:
     - Hereda la lógica de predicción HACK
     - Solo apuesta cuando está en MODO ACTIVO
+    - Detecta WIN/LOSS comparando la predicción REAL con el color REAL
     - Se activa tras detectar un WIN del juego
-    - APOSTAR EN LA MISMA RONDA que se detecta el WIN
     - Se desactiva (pausa) tras un LOSS
     """
     def __init__(self, user_id: int):
@@ -341,9 +343,11 @@ class PeakBreakPredictorV2:
         self.on_result = None
         
         # Estado PEAK BREAK
-        self.active_mode = False      # True = puede apostar
-        self.waiting_for_win = True   # Esperando WIN para activar
-        self.just_activated = False   # Para saber si acabamos de activar
+        self.active_mode = False          # True = puede apostar
+        self.waiting_for_win = True       # Esperando WIN para activar
+        self.last_bet_prediction = None   # Última predicción que se apostó
+        self.pending_bet = False          # Hay una apuesta pendiente de resultado
+        self.last_winner_color = None     # Último color que ganó
     
     def _normalizar_color(self, color: str) -> str:
         return self.hack_predictor._normalizar_color(color)
@@ -354,69 +358,72 @@ class PeakBreakPredictorV2:
         
         color = self._normalizar_color(color)
         
-        # Guardar si había predicción pendiente
-        had_prediction = self.hack_predictor.last_prediction is not None
+        # ============================================
+        # 1. VERIFICAR RESULTADO DE APUESTA PENDIENTE
+        # ============================================
+        if self.pending_bet and self.last_bet_prediction is not None:
+            is_win = (self.last_bet_prediction == color)
+            
+            if self.on_result:
+                if is_win:
+                    self.on_result(f"✅ WIN (PEAK BREAK)", True)
+                    self.active_mode = True      # Seguir apostando
+                    self.waiting_for_win = False
+                    self.last_winner_color = color
+                else:
+                    self.on_result(f"❌ LOSS (PEAK BREAK)", False)
+                    self.active_mode = False     # Pausar apuestas
+                    self.waiting_for_win = True
+                    self.last_winner_color = None
+            
+            self.pending_bet = False
+            self.last_bet_prediction = None
         
-        # Procesar color en el predictor HACK (actualiza su estado interno)
+        # ============================================
+        # 2. ACTUALIZAR PREDICTOR HACK
+        # ============================================
+        # Guardar la predicción ANTES de procesar el color
+        previous_prediction = self.hack_predictor.get_last_prediction()
+        
         self.hack_predictor.process_color(color)
         
-        # Verificar resultado de la apuesta anterior (si la hubo)
-        if had_prediction and not self.just_activated:
-            # Determinar si el resultado fue WIN o LOSS
-            is_win = False
-            if self.hack_predictor.last_prediction is not None:
-                is_win = (self.hack_predictor.last_prediction == color)
-            else:
-                # Si no hay predicción, usar el historial
-                if len(self.hack_predictor.session_history) >= 2:
-                    is_win = (self.hack_predictor.session_history[-1] == self.hack_predictor.session_history[-2])
-            
-            if is_win:
-                # WIN: Seguir en modo activo
+        # ============================================
+        # 3. DETECTAR WIN DEL JUEGO PARA ACTIVAR (si estamos en pausa)
+        # ============================================
+        if not self.active_mode and self.waiting_for_win and not self.pending_bet:
+            # Verificar si la PREDICCIÓN anterior del HACK acertó
+            if previous_prediction is not None and previous_prediction == color:
+                # El HACK acertó = WIN detectado
                 self.active_mode = True
                 self.waiting_for_win = False
-                if self.on_result:
-                    self.on_result(f"✅ WIN (PEAK BREAK)", True)
+                self.last_winner_color = color
+                if self.on_prediction:
+                    self.on_prediction(f"⛰️ WIN detectado - Activando PEAK BREAK!")
+        
+        # ============================================
+        # 4. GENERAR APUESTA SI ESTAMOS ACTIVOS
+        # ============================================
+        if self.active_mode and not self.pending_bet:
+            # Obtener la predicción actual del HACK
+            if self.hack_predictor.last_prediction:
+                pred = self.hack_predictor.last_prediction
             else:
-                # LOSS: Pausar apuestas
-                self.active_mode = False
-                self.waiting_for_win = True
-                if self.on_result:
-                    self.on_result(f"❌ LOSS (PEAK BREAK) - Pausando apuestas", False)
-        
-        # Detectar WIN del juego para activar y APOSTAR INMEDIATAMENTE
-        if not self.active_mode and self.waiting_for_win:
-            if len(self.hack_predictor.session_history) >= 2:
-                last = self.hack_predictor.session_history[-1]
-                prev = self.hack_predictor.session_history[-2]
-                if last == prev:  # Se repitió el color = WIN
-                    self.active_mode = True
-                    self.waiting_for_win = False
-                    self.just_activated = True
-                    
-                    # 🔥 APOSTAR INMEDIATAMENTE EN ESTA MISMA RONDA 🔥
-                    pred = self.hack_predictor.get_prediction_for_bet()
-                    if pred:
-                        pred_emoji = "🔴" if pred == 'red' else "🔵"
-                        if self.on_prediction:
-                            self.on_prediction(f"⛰️ PEAK BREAK (activado): {pred_emoji}")
-                    return  # Salir para no procesar dos veces
-        
-        # Resetear flag de activación
-        self.just_activated = False
-        
-        # Enviar predicción SOLO si estamos en modo activo y hay predicción nueva
-        if self.active_mode and self.hack_predictor.last_prediction and not self.just_activated:
-            pred = self.hack_predictor.last_prediction
-            pred_emoji = "🔴" if pred == 'red' else "🔵"
-            if self.on_prediction:
-                self.on_prediction(f"⛰️ PEAK BREAK: {pred_emoji}")
+                pred = self.hack_predictor.get_last_prediction()
+            
+            if pred:
+                self.last_bet_prediction = pred
+                self.pending_bet = True
+                pred_emoji = "🔴" if pred == 'red' else "🔵"
+                if self.on_prediction:
+                    self.on_prediction(f"⛰️ PEAK BREAK: {pred_emoji}")
     
     def reset(self):
         self.hack_predictor.reset()
         self.active_mode = False
         self.waiting_for_win = True
-        self.just_activated = False
+        self.last_bet_prediction = None
+        self.pending_bet = False
+        self.last_winner_color = None
 
 # ==================== POLLING GLOBAL ====================
 class GlobalPolling:
@@ -567,7 +574,7 @@ class PredictionBot:
         if mode == "hack":
             modo_texto = "⚡ HACK (Anti-sistema: seguir color + ANTI tras 2 pérdidas)"
         else:
-            modo_texto = "⛰️ PEAK BREAK V2 (Hereda HACK, apuesta tras WIN, sigue mientras gane)"
+            modo_texto = "⛰️ PEAK BREAK V2 (Hereda HACK, apuesta tras WIN real)"
         
         keyboard = [
             [InlineKeyboardButton("📡 MODO SEÑALES", callback_data='signals_mode')],
@@ -614,7 +621,7 @@ class PredictionBot:
         if mode == "hack":
             desc = "• Sigue el último color que sale\n• Si falla 2 veces seguidas → activa MODO ANTI por 2 rondas\n• En modo ANTI, apuesta al color contrario"
         else:
-            desc = "• Hereda la lógica HACK\n• Apuesta SOLO después de detectar un WIN\n• Sigue apostando mientras ganes\n• Al primer LOSS, espera el próximo WIN para reactivar"
+            desc = "• Hereda la lógica HACK\n• Detecta WIN real comparando predicción con resultado\n• Apuesta SOLO después de detectar un WIN real\n• Sigue apostando mientras ganes\n• Al primer LOSS, espera el próximo WIN real para reactivar"
         
         await query.edit_message_text(
             f"📡 MODO SEÑALES ACTIVADO - {'HACK' if mode == 'hack' else 'PEAK BREAK V2'}\n\n"
@@ -641,7 +648,7 @@ class PredictionBot:
         if mode == "hack":
             desc = "• Sigue el último color que sale\n• Si falla 2 veces seguidas → activa MODO ANTI por 2 rondas"
         else:
-            desc = "• Hereda la lógica HACK\n• Apuesta SOLO después de detectar un WIN\n• Sigue apostando mientras ganes\n• Al primer LOSS, espera el próximo WIN para reactivar"
+            desc = "• Hereda la lógica HACK\n• Detecta WIN real comparando predicción con resultado\n• Apuesta SOLO después de detectar un WIN real\n• Sigue apostando mientras ganes\n• Al primer LOSS, espera el próximo WIN real para reactivar"
         
         await query.edit_message_text(
             f"🤖 MODO AUTOMATICO - {'HACK' if mode == 'hack' else 'PEAK BREAK V2'}\n\n"
@@ -698,7 +705,7 @@ class PredictionBot:
             if not self.global_polling.running:
                 self.global_polling.start()
             
-            # 🔥 FUNCIÓN ON_PREDICTION - Ejecuta apuesta para cualquier mensaje con color 🔥
+            # FUNCIÓN ON_PREDICTION - Ejecuta apuesta para cualquier mensaje con color
             def on_prediction(msg):
                 self._sync_send_message(user_id, msg)
                 if self.user_sessions.get(user_id, {}).get('auto_betting_active'):
@@ -981,7 +988,7 @@ class PredictionBot:
         if bot_mode == "hack":
             reglas = "• Sigue el último color que sale\n• Si falla 2 veces seguidas → activa MODO ANTI por 2 rondas"
         else:
-            reglas = "• Hereda la lógica HACK\n• Apuesta SOLO después de detectar un WIN\n• Sigue apostando mientras ganes\n• Al primer LOSS, espera el próximo WIN para reactivar"
+            reglas = "• Hereda la lógica HACK\n• Detecta WIN real comparando predicción con resultado\n• Apuesta SOLO después de detectar un WIN real\n• Sigue apostando mientras ganes\n• Al primer LOSS, espera el próximo WIN real para reactivar"
         
         await update.callback_query.edit_message_text(
             f"✅ AUTO-BET ACTIVADO - {'HACK' if bot_mode == 'hack' else 'PEAK BREAK V2'}\n\n"
@@ -1138,7 +1145,7 @@ class PredictionBot:
             if mode == "hack":
                 desc = "HACK (Anti-sistema): Sigue el último color + ANTI tras 2 pérdidas"
             else:
-                desc = "PEAK BREAK V2: Hereda HACK, apuesta tras WIN, sigue mientras gane"
+                desc = "PEAK BREAK V2: Hereda HACK, detecta WIN real, apuesta tras WIN"
             
             await query.edit_message_text(
                 f"📜 INFORMACIÓN DE LICENCIA\n\n"
@@ -1175,7 +1182,7 @@ class PredictionBot:
                 "📋 USO: /validar USER_ID PLAN\n\n"
                 "PLANES DISPONIBLES:\n"
                 "• hack - Hack 30 días (15 USDT) - Estrategia Anti-sistema\n"
-                "• peakbreak - Peak Break 60 días (35 USDT) - Hereda HACK, apuesta tras WIN\n\n"
+                "• peakbreak - Peak Break 60 días (35 USDT) - Hereda HACK, apuesta tras WIN real\n\n"
                 "Ejemplo: /validar 123456789 hack"
             )
             return
@@ -1195,7 +1202,7 @@ class PredictionBot:
                 if plan == "hack":
                     mode_desc = "HACK (Anti-sistema: seguir color + ANTI tras 2 pérdidas)"
                 else:
-                    mode_desc = "PEAK BREAK V2 (Hereda HACK, apuesta tras WIN, sigue mientras gane)"
+                    mode_desc = "PEAK BREAK V2 (Hereda HACK, detecta WIN real comparando predicción con resultado, apuesta tras WIN)"
                 
                 await self._send_message(
                     target_user_id,
@@ -1280,19 +1287,19 @@ class PredictionBot:
         print("=" * 50)
         print("💰 PLANES:")
         print("  • Hack 30d: 15 USDT (1 cuenta) - Estrategia #3 Anti-sistema")
-        print("  • Peak Break 60d: 35 USDT (1 cuenta) - Hereda HACK, apuesta tras WIN")
+        print("  • Peak Break 60d: 35 USDT (1 cuenta) - Hereda HACK, apuesta tras WIN real")
         print("=" * 50)
         print("🎯 ESTRATEGIA HACK (#3):")
         print("  • Sigue el último color que sale")
         print("  • Si falla 2 veces seguidas → activa MODO ANTI por 2 rondas")
         print("  • En modo ANTI, apuesta al color contrario")
         print("=" * 50)
-        print("🎯 ESTRATEGIA PEAK BREAK V2:")
+        print("🎯 ESTRATEGIA PEAK BREAK V2 CORREGIDA:")
         print("  • Hereda la lógica de predicción HACK")
-        print("  • Apuesta SOLO después de detectar un WIN del juego")
-        print("  • APOSTAR EN LA MISMA RONDA que se detecta el WIN")
+        print("  • Detecta WIN/LOSS comparando la PREDICCIÓN REAL con el COLOR REAL")
+        print("  • Apuesta SOLO después de detectar un WIN real")
         print("  • Sigue apostando mientras ganes")
-        print("  • Al primer LOSS, espera el próximo WIN para reactivar")
+        print("  • Al primer LOSS, espera el próximo WIN real para reactivar")
         print("=" * 50)
         print("🎯 TAKE PROFIT:")
         print("  • Monto fijo por cuenta")
