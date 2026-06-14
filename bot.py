@@ -15,9 +15,9 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 # ==================== CONFIGURACIÓN ====================
-BOT_TOKEN = "8727206526:AAGa_Fbe7Eg8wdnHqj9mR4WO7pn_QMhNaOY"
-ADMIN_IDS = [5541162744]
-ADMIN_GROUP_ID = -1003982107323
+BOT_TOKEN = "8758409892:AAElGrpay6Kw5MvRL1TBfQRcK4omW63iQSQ"
+ADMIN_IDS = [8051843698]
+ADMIN_GROUP_ID = -1003731875494
 MY_WALLET_BEP20 = "0x621917958C7ac81190e9f876C23D6B9914f31263"
 
 # IMAGENES
