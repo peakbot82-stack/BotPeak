@@ -1,7 +1,8 @@
-# bot.py - PREDICTOR BOT V3 (HACK + PEAK BREAK V2 + CAZADOR)
+# bot.py - PREDICTOR BOT V4 (HACK + PEAK BREAK V2 + CAZADOR + TENDENCIAL)
 # HACK: Estrategia #3 Anti-sistema (seguir color + anti tras 2 pérdidas)
 # PEAK BREAK V2: Hereda HACK, detecta WIN/LOSS por predicción real, activación WIN + N LOSS
-# CAZADOR: Busca patrones DOBLE y TRIPLE repetición
+# CAZADOR: Busca patrones DOBLE y TRIPLE con BLOQUEO de color
+# TENDENCIAL: Ciclo fijo 2-3-2-3 basado en el primer color
 
 import json
 import os
@@ -30,6 +31,7 @@ LICENSE_PLANS = {
     "hack": {"price": 15, "days": 30, "max_users": 1, "name": "🔧 Hack 30 Días", "mode": "hack"},
     "peakbreak": {"price": 35, "days": 60, "max_users": 1, "name": "⛰️ Peak Break 60 Días", "mode": "peakbreak"},
     "cazador": {"price": 50, "days": 90, "max_users": 1, "name": "🎯 Cazador 90 Días", "mode": "cazador"},
+    "tendencial": {"price": 45, "days": 75, "max_users": 1, "name": "📊 Tendencial 75 Días", "mode": "tendencial"},
 }
 
 # ==================== LICENCIA MANAGER ====================
@@ -469,14 +471,16 @@ class PeakBreakPredictorV2:
         self.win_detected = False
         self.losses_count = 0
 
-# ==================== PREDICTOR CAZADOR (PATRONES DOBLE Y TRIPLE) ====================
+# ==================== PREDICTOR CAZADOR (PATRONES DOBLE Y TRIPLE CON BLOQUEO) ====================
 class CazadorPredictor:
     """
-    ESTRATEGIA CAZADOR:
+    ESTRATEGIA CAZADOR CORREGIDA:
     - Busca patrones DOBLE (🔴🔴 o 🔵🔵) y TRIPLE (🔴🔴🔴 o 🔵🔵🔵)
     - Apuesta al color contrario
     - Si falla en DOBLE, se convierte en TRIPLE y apuesta de nuevo
-    - Al WIN o LOSS en TRIPLE, se desactiva y busca nuevo patrón
+    - Al WIN o LOSS en TRIPLE, BLOQUEA el color del patrón
+    - No detecta patrones del color bloqueado hasta que aparezca el color contrario
+    - ESPERA EL PRIMER CAMBIO DE COLOR ANTES DE ACTIVARSE
     """
     def __init__(self, user_id: int):
         self.user_id = user_id
@@ -492,6 +496,12 @@ class CazadorPredictor:
         self.apuesta_pendiente = False
         self.apuesta_color = None
         self.esperando_resultado = False
+        
+        # Control del primer cambio de color
+        self.primer_cambio_detectado = False
+        
+        # Control de color bloqueado
+        self.color_bloqueado = None  # 'red' o 'blue' - No detectar este color
     
     def _normalizar_color(self, color: str) -> str:
         if color is None:
@@ -509,17 +519,37 @@ class CazadorPredictor:
     def _color_contrario(self, color: str) -> str:
         return 'blue' if color == 'red' else 'red'
     
-    def _check_doble(self, colores) -> bool:
-        """Verifica si hay doble repetición (ej: 🔴🔴)"""
+    def _buscar_patron(self, colores, color_bloqueado=None):
+        """
+        Busca el patrón más RECIENTE en TODO el historial
+        PRIORIZA TRIPLE sobre DOBLE
+        IGNORA el color bloqueado
+        """
         if len(colores) < 2:
-            return False
-        return colores[-1] == colores[-2]
-    
-    def _check_triple(self, colores) -> bool:
-        """Verifica si hay triple repetición (ej: 🔴🔴🔴)"""
-        if len(colores) < 3:
-            return False
-        return colores[-1] == colores[-2] == colores[-3]
+            return None, None
+        
+        # 1. Buscar TRIPLE (más específico)
+        if len(colores) >= 3:
+            # Buscar de atrás hacia adelante (más reciente primero)
+            for i in range(len(colores) - 3, -1, -1):
+                color = colores[i]
+                # Si el color está bloqueado, ignorar
+                if color_bloqueado is not None and color == color_bloqueado:
+                    continue
+                if colores[i] == colores[i+1] == colores[i+2]:
+                    return color, "triple"
+        
+        # 2. Buscar DOBLE
+        # Buscar de atrás hacia adelante (más reciente primero)
+        for i in range(len(colores) - 2, -1, -1):
+            color = colores[i]
+            # Si el color está bloqueado, ignorar
+            if color_bloqueado is not None and color == color_bloqueado:
+                continue
+            if colores[i] == colores[i+1]:
+                return color, "doble"
+        
+        return None, None
     
     def process_color(self, color: str):
         if not self.active:
@@ -552,7 +582,7 @@ class CazadorPredictor:
                 self._generar_apuesta()
                 return
             
-            # Si estábamos en TRIPLE o ganamos en DOBLE → Desactivar
+            # Si estábamos en TRIPLE o ganamos en DOBLE → Resetear
             else:
                 if self.on_prediction:
                     if is_win:
@@ -560,47 +590,66 @@ class CazadorPredictor:
                     else:
                         self.on_prediction("❌ Patrón falló - Buscando nuevo patrón")
                 
-                # Resetear todo
+                # ⭐ BLOQUEAR EL COLOR DEL PATRÓN
+                if self.patron_color is not None:
+                    self.color_bloqueado = self.patron_color
+                    if self.on_prediction:
+                        self.on_prediction(f"🚫 BLOQUEADO: {self._color_emoji(self.color_bloqueado)} (esperando {self._color_emoji(self._color_contrario(self.color_bloqueado))})")
+                
+                # Resetear todo, pero mantener historial
                 self.estado = "BUSCANDO"
                 self.patron_color = None
                 self.patron_tipo = None
                 self.apuesta_pendiente = False
                 self.esperando_resultado = False
                 self.apuesta_color = None
-                self.ultimos_colores = []
+                # NO LIMPIAR EL HISTORIAL
                 return
         
         # ============================================
         # 2. AGREGAR COLOR AL HISTORIAL
         # ============================================
         self.ultimos_colores.append(color)
-        if len(self.ultimos_colores) > 10:
-            self.ultimos_colores = self.ultimos_colores[-10:]
+        if len(self.ultimos_colores) > 20:
+            self.ultimos_colores = self.ultimos_colores[-20:]
         
         # ============================================
-        # 3. BUSCAR PATRONES (solo si no hay apuesta pendiente)
+        # 3. ESPERAR EL PRIMER CAMBIO DE COLOR
+        # ============================================
+        if not self.primer_cambio_detectado:
+            if len(self.ultimos_colores) >= 2:
+                # Si el último color es diferente al anterior → HAY CAMBIO
+                if self.ultimos_colores[-1] != self.ultimos_colores[-2]:
+                    self.primer_cambio_detectado = True
+                    if self.on_prediction:
+                        self.on_prediction("🔍 CAZADOR ACTIVADO - Buscando patrones")
+            # Si no hay cambio, salimos (NO buscamos patrones)
+            if not self.primer_cambio_detectado:
+                return
+        
+        # ============================================
+        # 4. BUSCAR PATRONES EN TODO EL HISTORIAL
         # ============================================
         if not self.apuesta_pendiente and not self.esperando_resultado and self.estado == "BUSCANDO":
             
-            # Verificar TRIPLE primero (más específico)
-            if self._check_triple(self.ultimos_colores):
-                self.patron_color = self.ultimos_colores[-1]
-                self.patron_tipo = "triple"
-                self.estado = "TRIPLE"
-                if self.on_prediction:
-                    self.on_prediction(f"🎯 TRIPLE detectado: {self._color_emoji(self.patron_color)}{self._color_emoji(self.patron_color)}{self._color_emoji(self.patron_color)}")
-                self._generar_apuesta()
-                return
+            # Buscar el mejor patrón en TODO el historial
+            # ⭐ IGNORANDO EL COLOR BLOQUEADO
+            patron_color, patron_tipo = self._buscar_patron(self.ultimos_colores, self.color_bloqueado)
             
-            # Verificar DOBLE
-            if self._check_doble(self.ultimos_colores):
-                self.patron_color = self.ultimos_colores[-1]
-                self.patron_tipo = "doble"
-                self.estado = "DOBLE"
-                if self.on_prediction:
-                    self.on_prediction(f"🎯 DOBLE detectado: {self._color_emoji(self.patron_color)}{self._color_emoji(self.patron_color)}")
+            if patron_color is not None:
+                self.patron_color = patron_color
+                self.patron_tipo = patron_tipo
+                
+                if patron_tipo == "triple":
+                    self.estado = "TRIPLE"
+                    if self.on_prediction:
+                        self.on_prediction(f"🎯 TRIPLE detectado: {self._color_emoji(patron_color)}{self._color_emoji(patron_color)}{self._color_emoji(patron_color)}")
+                else:
+                    self.estado = "DOBLE"
+                    if self.on_prediction:
+                        self.on_prediction(f"🎯 DOBLE detectado: {self._color_emoji(patron_color)}{self._color_emoji(patron_color)}")
+                
                 self._generar_apuesta()
-                return
     
     def _generar_apuesta(self):
         """Genera apuesta al color contrario del patrón"""
@@ -625,6 +674,153 @@ class CazadorPredictor:
         self.apuesta_pendiente = False
         self.apuesta_color = None
         self.esperando_resultado = False
+        self.primer_cambio_detectado = False
+        self.color_bloqueado = None
+
+# ==================== PREDICTOR TENDENCIAL (CICLO FIJO 2-3-2-3) ====================
+class TendencialPredictor:
+    """
+    ESTRATEGIA TENDENCIAL:
+    - Espera el primer color que sale
+    - Ciclo fijo: 2 del primer color, 3 del contrario, 2, 3, 2, 3...
+    - NO cambia por WIN/LOSS, solo sigue el ciclo
+    - PERO muestra el resultado de cada apuesta (WIN/LOSS)
+    """
+    def __init__(self, user_id: int):
+        self.user_id = user_id
+        self.active = True
+        self.on_prediction = None
+        self.on_result = None
+        
+        # Estado TENDENCIAL
+        self.estado = "ESPERANDO"  # ESPERANDO | ACTIVO
+        self.primer_color = None   # 'red' o 'blue'
+        self.ciclo_actual = None   # 'primario' (2) o 'secundario' (3)
+        self.rondas_actuales = 0
+        self.color_apuesta = None
+        self.apuesta_pendiente = False
+        self.esperando_resultado = False
+        
+        # Guardar la última predicción para verificar WIN/LOSS
+        self.ultima_prediccion = None
+    
+    def _normalizar_color(self, color: str) -> str:
+        if color is None:
+            return 'red'
+        c = str(color).lower().strip()
+        if c in ['red', 'rojo', '🔴', '1', 'r']:
+            return 'red'
+        if c in ['blue', 'azul', '🔵', '2', 'b']:
+            return 'blue'
+        return 'red'
+    
+    def _color_emoji(self, color: str) -> str:
+        return "🔴" if color == 'red' else "🔵"
+    
+    def _color_contrario(self, color: str) -> str:
+        return 'blue' if color == 'red' else 'red'
+    
+    def _calcular_siguiente_apuesta(self):
+        """Calcula la siguiente apuesta según el ciclo fijo"""
+        if self.primer_color is None:
+            return None
+        
+        # Si estamos en PRIMARIO (2 rondas)
+        if self.ciclo_actual == "primario":
+            if self.rondas_actuales < 2:
+                self.rondas_actuales += 1
+                return self.primer_color
+            else:
+                # Cambiar a SECUNDARIO
+                self.ciclo_actual = "secundario"
+                self.rondas_actuales = 1
+                return self._color_contrario(self.primer_color)
+        
+        # Si estamos en SECUNDARIO (3 rondas)
+        else:  # "secundario"
+            if self.rondas_actuales < 3:
+                self.rondas_actuales += 1
+                return self._color_contrario(self.primer_color)
+            else:
+                # Cambiar a PRIMARIO
+                self.ciclo_actual = "primario"
+                self.rondas_actuales = 1
+                return self.primer_color
+    
+    def process_color(self, color: str):
+        if not self.active:
+            return
+        
+        color = self._normalizar_color(color)
+        
+        # ============================================
+        # 1. VERIFICAR RESULTADO DE APUESTA PENDIENTE
+        # ============================================
+        if self.esperando_resultado and self.ultima_prediccion is not None:
+            is_win = (self.ultima_prediccion == color)
+            
+            if self.on_result:
+                if is_win:
+                    self.on_result(f"✅ WIN (TENDENCIAL)", True)
+                else:
+                    self.on_result(f"❌ LOSS (TENDENCIAL)", False)
+            
+            self.esperando_resultado = False
+            self.ultima_prediccion = None
+            self.apuesta_pendiente = False
+        
+        # ============================================
+        # 2. ESPERAR EL PRIMER COLOR
+        # ============================================
+        if self.estado == "ESPERANDO":
+            self.primer_color = color
+            self.estado = "ACTIVO"
+            self.ciclo_actual = "primario"
+            self.rondas_actuales = 1
+            
+            if self.on_prediction:
+                self.on_prediction(f"📊 TENDENCIAL ACTIVADO - Primer color: {self._color_emoji(color)}")
+                self.on_prediction(f"📊 Ciclo: {self._color_emoji(color)}{self._color_emoji(color)}{self._color_emoji(self._color_contrario(color))}{self._color_emoji(self._color_contrario(color))}{self._color_emoji(self._color_contrario(color))} ...")
+            
+            # Generar primera apuesta
+            self.color_apuesta = self.primer_color
+            self.apuesta_pendiente = True
+            self.esperando_resultado = True
+            self.ultima_prediccion = self.color_apuesta
+            
+            if self.on_prediction:
+                self.on_prediction(f"🎯 TENDENCIAL (1/2): {self._color_emoji(self.color_apuesta)}")
+            return
+        
+        # ============================================
+        # 3. SI ESTAMOS ACTIVOS, CALCULAR SIGUIENTE APUESTA
+        # ============================================
+        if self.estado == "ACTIVO" and not self.apuesta_pendiente:
+            siguiente = self._calcular_siguiente_apuesta()
+            
+            if siguiente is not None:
+                self.color_apuesta = siguiente
+                self.apuesta_pendiente = True
+                self.esperando_resultado = True
+                self.ultima_prediccion = self.color_apuesta
+                
+                # Mostrar la apuesta con información del ciclo
+                if self.ciclo_actual == "primario":
+                    emoji = self._color_emoji(self.color_apuesta)
+                    self.on_prediction(f"🎯 TENDENCIAL ({self.rondas_actuales}/2): {emoji}")
+                else:
+                    emoji = self._color_emoji(self.color_apuesta)
+                    self.on_prediction(f"🎯 TENDENCIAL ({self.rondas_actuales}/3): {emoji}")
+    
+    def reset(self):
+        self.estado = "ESPERANDO"
+        self.primer_color = None
+        self.ciclo_actual = None
+        self.rondas_actuales = 0
+        self.color_apuesta = None
+        self.apuesta_pendiente = False
+        self.esperando_resultado = False
+        self.ultima_prediccion = None
 
 # ==================== POLLING GLOBAL ====================
 class GlobalPolling:
@@ -655,6 +851,8 @@ class GlobalPolling:
                 predictor = PeakBreakPredictorV2(user_id)
             elif mode == "cazador":
                 predictor = CazadorPredictor(user_id)
+            elif mode == "tendencial":
+                predictor = TendencialPredictor(user_id)
             else:
                 predictor = HackPredictor(user_id)
             predictor.on_prediction = on_prediction
@@ -759,13 +957,15 @@ class PredictionBot:
                 [InlineKeyboardButton("🔧 Hack 30d - 15 USDT", callback_data='plan_hack')],
                 [InlineKeyboardButton("⛰️ Peak Break 60d - 35 USDT", callback_data='plan_peakbreak')],
                 [InlineKeyboardButton("🎯 Cazador 90d - 50 USDT", callback_data='plan_cazador')],
+                [InlineKeyboardButton("📊 Tendencial 75d - 45 USDT", callback_data='plan_tendencial')],
             ]
             await update.message.reply_text(
                 "🔒 ACCESO RESTRINGIDO\n\nNo tienes licencia activa.\n\n"
                 "💰 PLANES DISPONIBLES:\n"
                 "• 🔧 Hack 30d: 15 USDT (1 cuenta) - Estrategia #3 Anti-sistema\n"
                 "• ⛰️ Peak Break 60d: 35 USDT (1 cuenta) - Hereda HACK, WIN + N LOSS\n"
-                "• 🎯 Cazador 90d: 50 USDT (1 cuenta) - Patrones DOBLE y TRIPLE\n\n"
+                "• 🎯 Cazador 90d: 50 USDT (1 cuenta) - Patrones DOBLE y TRIPLE con BLOQUEO\n"
+                "• 📊 Tendencial 75d: 45 USDT (1 cuenta) - Ciclo fijo 2-3-2-3\n\n"
                 "Selecciona una opción:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
@@ -780,8 +980,10 @@ class PredictionBot:
             modo_texto = "⚡ HACK (Anti-sistema: seguir color + ANTI tras 2 pérdidas)"
         elif mode == "peakbreak":
             modo_texto = "⛰️ PEAK BREAK V2 (WIN + N LOSS, N=1/2 cíclico)"
+        elif mode == "cazador":
+            modo_texto = "🎯 CAZADOR (Patrones DOBLE y TRIPLE con BLOQUEO)"
         else:
-            modo_texto = "🎯 CAZADOR (Patrones DOBLE y TRIPLE)"
+            modo_texto = "📊 TENDENCIAL (Ciclo fijo 2-3-2-3)"
         
         keyboard = [
             [InlineKeyboardButton("📡 MODO SEÑALES", callback_data='signals_mode')],
@@ -791,7 +993,7 @@ class PredictionBot:
         ]
         
         await update.message.reply_text(
-            f"🎰 PREDICTOR BOT V3\n\n"
+            f"🎰 PREDICTOR BOT V4\n\n"
             f"✅ Licencia: {plan_name}\n"
             f"🎲 Modo: {modo_texto}\n"
             f"👥 Máx cuentas: {max_accounts}\n\n"
@@ -829,8 +1031,10 @@ class PredictionBot:
             desc = "• Sigue el último color que sale\n• Si falla 2 veces seguidas → activa MODO ANTI por 2 rondas\n• En modo ANTI, apuesta al color contrario"
         elif mode == "peakbreak":
             desc = "• Hereda la lógica HACK\n• Detecta WIN real comparando predicción con resultado\n• Se activa con WIN + N LOSS (N=1 o 2, cíclico)\n• Sigue apostando mientras ganes\n• Al primer LOSS, espera el patrón de activación"
+        elif mode == "cazador":
+            desc = "• Busca patrones DOBLE (🔴🔴 o 🔵🔵) y TRIPLE (🔴🔴🔴 o 🔵🔵🔵)\n• Apuesta al color contrario\n• Si falla DOBLE → automáticamente TRIPLE\n• Al WIN o LOSS en TRIPLE → BLOQUEA el color del patrón\n• No detecta el color bloqueado hasta que aparezca el contrario\n• Espera el primer cambio de color para activarse"
         else:
-            desc = "• Busca patrones DOBLE (🔴🔴 o 🔵🔵)\n• Busca patrones TRIPLE (🔴🔴🔴 o 🔵🔵🔵)\n• Apuesta al color contrario\n• Si falla DOBLE → automáticamente TRIPLE\n• Al WIN o LOSS en TRIPLE → busca nuevo patrón"
+            desc = "• Espera el PRIMER COLOR que sale\n• Ciclo fijo: 2 del primer color, 3 del contrario, 2, 3, 2, 3...\n• NO cambia por WIN/LOSS, sigue el ciclo fijo\n• PERO muestra el resultado de cada apuesta (WIN/LOSS)"
         
         await query.edit_message_text(
             f"📡 MODO SEÑALES ACTIVADO - {mode.upper()}\n\n"
@@ -858,8 +1062,10 @@ class PredictionBot:
             desc = "• Sigue el último color que sale\n• Si falla 2 veces seguidas → activa MODO ANTI por 2 rondas"
         elif mode == "peakbreak":
             desc = "• Hereda la lógica HACK\n• Detecta WIN real comparando predicción con resultado\n• Se activa con WIN + N LOSS (N=1 o 2, cíclico)\n• Sigue apostando mientras ganes\n• Al primer LOSS, espera el patrón de activación"
+        elif mode == "cazador":
+            desc = "• Busca patrones DOBLE (🔴🔴 o 🔵🔵) y TRIPLE (🔴🔴🔴 o 🔵🔵🔵)\n• Apuesta al color contrario\n• Si falla DOBLE → automáticamente TRIPLE\n• Al WIN o LOSS en TRIPLE → BLOQUEA el color del patrón\n• No detecta el color bloqueado hasta que aparezca el contrario\n• Espera el primer cambio de color para activarse"
         else:
-            desc = "• Busca patrones DOBLE (🔴🔴 o 🔵🔵)\n• Busca patrones TRIPLE (🔴🔴🔴 o 🔵🔵🔵)\n• Apuesta al color contrario\n• Si falla DOBLE → automáticamente TRIPLE\n• Al WIN o LOSS en TRIPLE → busca nuevo patrón"
+            desc = "• Espera el PRIMER COLOR que sale\n• Ciclo fijo: 2 del primer color, 3 del contrario, 2, 3, 2, 3...\n• NO cambia por WIN/LOSS, sigue el ciclo fijo\n• PERO muestra el resultado de cada apuesta (WIN/LOSS)"
         
         await query.edit_message_text(
             f"🤖 MODO AUTOMATICO - {mode.upper()}\n\n"
@@ -1035,8 +1241,10 @@ class PredictionBot:
             modo_texto = "HACK (Anti-sistema)"
         elif bot_mode == "peakbreak":
             modo_texto = "PEAK BREAK V2 (WIN + N LOSS)"
+        elif bot_mode == "cazador":
+            modo_texto = "CAZADOR (Doble/Triple con BLOQUEO)"
         else:
-            modo_texto = "CAZADOR (Doble/Triple)"
+            modo_texto = "TENDENCIAL (Ciclo 2-3-2-3)"
         
         keyboard = [
             [InlineKeyboardButton(f"💰 Inicial: ${config['initial_bet']}", callback_data='cfg_initial')],
@@ -1202,8 +1410,10 @@ class PredictionBot:
             reglas = "• Sigue el último color que sale\n• Si falla 2 veces seguidas → activa MODO ANTI por 2 rondas"
         elif bot_mode == "peakbreak":
             reglas = "• Hereda la lógica HACK\n• Detecta WIN real comparando predicción con resultado\n• Se activa con WIN + N LOSS (N=1 o 2, cíclico)\n• Sigue apostando mientras ganes\n• Al primer LOSS, espera el patrón de activación"
+        elif bot_mode == "cazador":
+            reglas = "• Busca patrones DOBLE (🔴🔴 o 🔵🔵) y TRIPLE (🔴🔴🔴 o 🔵🔵🔵)\n• Apuesta al color contrario\n• Si falla DOBLE → automáticamente TRIPLE\n• Al WIN o LOSS en TRIPLE → BLOQUEA el color del patrón\n• No detecta el color bloqueado hasta que aparezca el contrario\n• Espera el primer cambio de color para activarse"
         else:
-            reglas = "• Busca patrones DOBLE (🔴🔴 o 🔵🔵)\n• Busca patrones TRIPLE (🔴🔴🔴 o 🔵🔵🔵)\n• Apuesta al color contrario\n• Si falla DOBLE → automáticamente TRIPLE\n• Al WIN o LOSS en TRIPLE → busca nuevo patrón"
+            reglas = "• Espera el PRIMER COLOR que sale\n• Ciclo fijo: 2 del primer color, 3 del contrario, 2, 3, 2, 3...\n• NO cambia por WIN/LOSS, sigue el ciclo fijo\n• PERO muestra el resultado de cada apuesta (WIN/LOSS)"
         
         await update.callback_query.edit_message_text(
             f"✅ AUTO-BET ACTIVADO - {bot_mode.upper()}\n\n"
@@ -1239,6 +1449,7 @@ class PredictionBot:
             [InlineKeyboardButton("🔧 Hack 30d - 15 USDT", callback_data='plan_hack')],
             [InlineKeyboardButton("⛰️ Peak Break 60d - 35 USDT", callback_data='plan_peakbreak')],
             [InlineKeyboardButton("🎯 Cazador 90d - 50 USDT", callback_data='plan_cazador')],
+            [InlineKeyboardButton("📊 Tendencial 75d - 45 USDT", callback_data='plan_tendencial')],
         ]
         await update.callback_query.edit_message_text(
             "💰 COMPRAR LICENCIA\n\n"
@@ -1362,8 +1573,10 @@ class PredictionBot:
                 desc = "HACK (Anti-sistema): Sigue el último color + ANTI tras 2 pérdidas"
             elif mode == "peakbreak":
                 desc = "PEAK BREAK V2: Hereda HACK, WIN + N LOSS (N=1/2 cíclico)"
+            elif mode == "cazador":
+                desc = "CAZADOR: Patrones DOBLE y TRIPLE con BLOQUEO de color"
             else:
-                desc = "CAZADOR: Patrones DOBLE y TRIPLE, apuesta al contrario"
+                desc = "TENDENCIAL: Ciclo fijo 2-3-2-3 basado en el primer color"
             
             await query.edit_message_text(
                 f"📜 INFORMACIÓN DE LICENCIA\n\n"
@@ -1401,7 +1614,8 @@ class PredictionBot:
                 "PLANES DISPONIBLES:\n"
                 "• hack - Hack 30 días (15 USDT) - Estrategia Anti-sistema\n"
                 "• peakbreak - Peak Break 60 días (35 USDT) - WIN + N LOSS\n"
-                "• cazador - Cazador 90 días (50 USDT) - Patrones DOBLE y TRIPLE\n\n"
+                "• cazador - Cazador 90 días (50 USDT) - Patrones DOBLE y TRIPLE con BLOQUEO\n"
+                "• tendencial - Tendencial 75 días (45 USDT) - Ciclo fijo 2-3-2-3\n\n"
                 "Ejemplo: /validar 123456789 hack"
             )
             return
@@ -1422,8 +1636,10 @@ class PredictionBot:
                     mode_desc = "HACK (Anti-sistema: seguir color + ANTI tras 2 pérdidas)"
                 elif plan == "peakbreak":
                     mode_desc = "PEAK BREAK V2 (Hereda HACK, WIN + N LOSS, N=1/2 cíclico)"
+                elif plan == "cazador":
+                    mode_desc = "CAZADOR (Patrones DOBLE y TRIPLE con BLOQUEO de color)"
                 else:
-                    mode_desc = "CAZADOR (Patrones DOBLE y TRIPLE, apuesta al contrario)"
+                    mode_desc = "TENDENCIAL (Ciclo fijo 2-3-2-3 basado en el primer color)"
                 
                 await self._send_message(
                     target_user_id,
@@ -1504,31 +1720,34 @@ class PredictionBot:
         self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_any_photo))
         
         print("=" * 60)
-        print("🎰 PREDICTOR BOT V3 - HACK + PEAK BREAK V2 + CAZADOR")
+        print("🎰 PREDICTOR BOT V4 - HACK + PEAK BREAK + CAZADOR + TENDENCIAL")
         print("=" * 60)
         print("💰 PLANES DE LICENCIA:")
         print("  • 🔧 Hack 30d: 15 USDT (1 cuenta) - Estrategia #3 Anti-sistema")
         print("  • ⛰️ Peak Break 60d: 35 USDT (1 cuenta) - WIN + N LOSS (N=1/2 cíclico)")
-        print("  • 🎯 Cazador 90d: 50 USDT (1 cuenta) - Patrones DOBLE y TRIPLE")
+        print("  • 🎯 Cazador 90d: 50 USDT (1 cuenta) - Patrones DOBLE y TRIPLE con BLOQUEO")
+        print("  • 📊 Tendencial 75d: 45 USDT (1 cuenta) - Ciclo fijo 2-3-2-3")
         print("=" * 60)
         print("🎯 ESTRATEGIA HACK (#3):")
         print("  • Sigue el último color que sale")
         print("  • Si falla 2 veces seguidas → activa MODO ANTI por 2 rondas")
-        print("  • En modo ANTI, apuesta al color contrario")
         print("=" * 60)
-        print("🎯 ESTRATEGIA PEAK BREAK V2 CORREGIDA:")
+        print("🎯 ESTRATEGIA PEAK BREAK V2:")
         print("  • Hereda la lógica de predicción HACK")
-        print("  • Detecta WIN/LOSS comparando la PREDICCIÓN REAL con el COLOR REAL")
         print("  • Se activa con WIN + N LOSS (N=1 o 2, cíclico)")
         print("  • Sigue apostando mientras ganes")
-        print("  • Al primer LOSS, espera el patrón de activación")
         print("=" * 60)
         print("🎯 ESTRATEGIA CAZADOR:")
-        print("  • Busca patrones DOBLE (🔴🔴 o 🔵🔵)")
-        print("  • Busca patrones TRIPLE (🔴🔴🔴 o 🔵🔵🔵)")
+        print("  • ESPERA EL PRIMER CAMBIO DE COLOR para activarse")
+        print("  • Busca patrones DOBLE y TRIPLE")
         print("  • Apuesta al color contrario")
-        print("  • Si falla en DOBLE → se convierte en TRIPLE")
-        print("  • Al WIN o LOSS en TRIPLE → busca nuevo patrón")
+        print("  • BLOQUEA el color del patrón al completarlo")
+        print("=" * 60)
+        print("🎯 ESTRATEGIA TENDENCIAL:")
+        print("  • Espera el PRIMER COLOR que sale")
+        print("  • Ciclo fijo: 2-3-2-3 (2 del primero, 3 del contrario)")
+        print("  • NO cambia por WIN/LOSS, solo sigue el ciclo")
+        print("  • PERO muestra el resultado de cada apuesta (WIN/LOSS)")
         print("=" * 60)
         print("🎯 TAKE PROFIT:")
         print("  • Monto fijo por cuenta")
@@ -1540,6 +1759,6 @@ class PredictionBot:
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    print("🚀 INICIANDO PREDICTOR BOT V3...")
+    print("🚀 INICIANDO PREDICTOR BOT V4...")
     bot = PredictionBot(BOT_TOKEN)
     bot.run()
