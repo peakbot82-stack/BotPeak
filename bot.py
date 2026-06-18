@@ -1,8 +1,5 @@
-# bot.py - PREDICTOR BOT V4 (HACK + PEAK BREAK V2 + CAZADOR + TENDENCIAL)
-# HACK: Estrategia #3 Anti-sistema (seguir color + anti tras 2 pérdidas)
-# PEAK BREAK V2: Hereda HACK, detecta WIN/LOSS por predicción real, activación WIN + N LOSS
-# CAZADOR: Busca patrones DOBLE y TRIPLE con BLOQUEO de color
-# TENDENCIAL: Ciclo fijo 2-3-2-3 basado en el primer color
+# bot.py - PREDICTOR BOT V5 (HACK + PEAK BREAK V2 + CAZADOR + TENDENCIAL)
+# CON SISTEMA DE PAUSA Y REINICIO CON RECUPERACIÓN DE SALDO
 
 import json
 import os
@@ -91,7 +88,7 @@ class LicenseManager:
         days = (expiry - datetime.now()).days
         return max(0, days)
 
-# ==================== USER ACCOUNT (CON TAKE PROFIT) ====================
+# ==================== USER ACCOUNT (CON PAUSA Y REINICIO) ====================
 class UserAccount:
     def __init__(self, username, password):
         self.username = username
@@ -101,6 +98,7 @@ class UserAccount:
         self.balance = 0.0
         self.logged_in = False
         self.initial_bet = 0.1
+        self.initial_bet_original = 0.1  # Guardar la apuesta inicial original
         self.current_bet = 0.1
         self.max_consecutive_losses = 5
         self.max_bet = 10.0
@@ -113,6 +111,16 @@ class UserAccount:
         # TAKE PROFIT
         self.initial_balance_snapshot = 0.0
         self.take_profit_amount = 0.0
+        
+        # SISTEMA DE PAUSA Y REINICIO
+        self.paused = False
+        self.restart_bet = 0.1
+        self.waiting_for_win = False
+        self.max_pauses = 2
+        self.current_pauses = 0
+        self.saldo_inicial_pausa = 0.0
+        self.saldo_perdido = 0.0
+        self.saldo_recuperado = False
         
         self.session = requests.Session()
         self.session.headers.update({
@@ -199,6 +207,79 @@ class UserAccount:
             return "Sin snapshot inicial"
         profit = self.balance - self.initial_balance_snapshot
         return f"💰 Inicial: ${self.initial_balance_snapshot:.2f} | Actual: ${self.balance:.2f} | Ganancia: ${profit:.2f}"
+    
+    # ==================== SISTEMA DE PAUSA Y REINICIO ====================
+    def activate_pause(self) -> bool:
+        """Activa el modo pausa y guarda el saldo"""
+        if self.current_pauses >= self.max_pauses:
+            return False  # Límite alcanzado
+        
+        self.paused = True
+        self.waiting_for_win = True
+        self.current_pauses += 1
+        self.saldo_inicial_pausa = self.balance
+        self.saldo_perdido = 0  # Se calculará en el mensaje
+        self.saldo_recuperado = False
+        return True
+    
+    def check_pause_and_restart(self, color, prediction) -> tuple:
+        """
+        Verifica si debe reactivarse después de una pausa
+        Retorna: (reactivado, mensaje)
+        """
+        if not self.paused:
+            return False, None
+        
+        # Si está en pausa, verificar si hay WIN
+        if prediction is not None and prediction == color:
+            # ¡WIN DETECTADO! Reactivar
+            self.paused = False
+            self.waiting_for_win = False
+            self.current_bet = self.restart_bet
+            self.initial_bet = self.restart_bet
+            self.consecutive_losses = 0
+            self.saldo_recuperado = False
+            return True, "REACTIVADO"
+        
+        return False, None
+    
+    def check_saldo_recuperado(self) -> bool:
+        """Verifica si ya recuperó el saldo perdido"""
+        if self.saldo_perdido <= 0:
+            return False
+        
+        ganancia_actual = self.balance - self.saldo_inicial_pausa
+        if ganancia_actual >= self.saldo_perdido:
+            # ¡Saldo recuperado!
+            self.saldo_recuperado = True
+            # Volver a la apuesta inicial ORIGINAL
+            self.current_bet = self.initial_bet_original
+            self.initial_bet = self.initial_bet_original
+            return True
+        
+        return False
+    
+    def check_stop_loss(self) -> str:
+        """Verifica si alcanzó el stop loss y debe pausar"""
+        if self.consecutive_losses >= self.max_consecutive_losses:
+            if self.current_pauses < self.max_pauses:
+                return "PAUSAR"  # Pausar, aún hay intentos
+            else:
+                return "DETENER"  # Detener permanentemente
+        return "CONTINUAR"
+    
+    def reset_pause_system(self):
+        """Resetea el sistema de pausas (para reinicio manual)"""
+        self.paused = False
+        self.waiting_for_win = False
+        self.current_pauses = 0
+        self.saldo_inicial_pausa = 0.0
+        self.saldo_perdido = 0.0
+        self.saldo_recuperado = False
+        self.betting_active = True
+        self.current_bet = self.initial_bet_original
+        self.initial_bet = self.initial_bet_original
+        self.consecutive_losses = 0
 
 # ==================== PREDICTOR HACK (ESTRATEGIA #3) ====================
 class HackPredictor:
@@ -993,7 +1074,7 @@ class PredictionBot:
         ]
         
         await update.message.reply_text(
-            f"🎰 PREDICTOR BOT V4\n\n"
+            f"🎰 PREDICTOR BOT V5\n\n"
             f"✅ Licencia: {plan_name}\n"
             f"🎲 Modo: {modo_texto}\n"
             f"👥 Máx cuentas: {max_accounts}\n\n"
@@ -1153,6 +1234,8 @@ class PredictionBot:
                     'max_losses': 5,
                     'use_martingale': False,
                     'take_profit': 0.0,
+                    'restart_bet': 0.1,      # NUEVO: Monto de reinicio
+                    'max_pauses': 2,           # NUEVO: Máximo de pausas
                 }
             }
             await self.show_betting_config(update, user_id)
@@ -1168,6 +1251,10 @@ class PredictionBot:
             return
         
         for account in session.get('accounts', []):
+            # ⭐ NUEVO: Si está en pausa, no apostar
+            if account.paused:
+                continue
+            
             if not account.betting_active or account.balance <= 0:
                 continue
             
@@ -1195,6 +1282,19 @@ class PredictionBot:
             if won:
                 account.wins += 1
                 account.reset_bet()
+                
+                # ⭐ NUEVO: Verificar si recuperó el saldo
+                if account.saldo_perdido > 0 and not account.saldo_recuperado:
+                    if account.check_saldo_recuperado():
+                        self._sync_send_message(user_id, f"🎉 ¡SALDO RECUPERADO! - {account.username}")
+                        self._sync_send_message(user_id, f"💰 Saldo inicial: ${account.saldo_inicial_pausa:.2f}")
+                        self._sync_send_message(user_id, f"💰 Saldo actual: ${account.balance:.2f}")
+                        self._sync_send_message(user_id, f"💰 Ganancia recuperada: ${account.saldo_perdido:.2f}")
+                        self._sync_send_message(user_id, f"🔄 Volviendo a apuesta inicial original: ${account.initial_bet_original:.2f}")
+                        self._sync_send_message(user_id, f"📊 Pausas usadas: {account.current_pauses}/{account.max_pauses}")
+                        account.saldo_perdido = 0
+                        account.saldo_inicial_pausa = 0
+                
                 self._sync_send_message(user_id, f"💰 {account.username}: WIN - Reiniciada a ${account.current_bet:.2f}")
                 
                 if account.check_take_profit():
@@ -1202,12 +1302,41 @@ class PredictionBot:
                     profit_info = account.get_profit_info()
                     self._sync_send_message(user_id, f"🎯 ¡TAKE PROFIT ALCANZADO! {account.username}\n{profit_info}\n🛑 Apuestas detenidas para esta cuenta")
                     self._sync_send_take_profit_image(user_id)
+                    
             else:
                 account.losses += 1
-                if account.consecutive_losses + 1 >= account.max_consecutive_losses:
-                    self._sync_send_message(user_id, f"🛑 {account.username}: Stop loss alcanzado")
+                
+                # ⭐ NUEVO: Verificar stop loss con sistema de pausas
+                stop_loss_status = account.check_stop_loss()
+                
+                if stop_loss_status == "PAUSAR":
+                    # Activar pausa
+                    account.saldo_perdido = account.balance - account.saldo_inicial_pausa if account.saldo_inicial_pausa > 0 else 0
+                    if account.activate_pause():
+                        self._sync_send_message(user_id, f"🛑 STOP LOSS ALCANZADO - {account.username}")
+                        self._sync_send_message(user_id, f"📉 Pérdidas consecutivas: {account.max_consecutive_losses}")
+                        self._sync_send_message(user_id, f"💰 Saldo actual: ${account.balance:.2f}")
+                        self._sync_send_message(user_id, f"💰 Saldo perdido: ${account.saldo_perdido:.2f}")
+                        self._sync_send_message(user_id, f"💤 Cuenta en PAUSA #{account.current_pauses}/{account.max_pauses} - Esperando WIN para reiniciar")
+                        self._sync_send_message(user_id, f"🔄 Monto de reinicio: ${account.restart_bet:.2f}")
+                        account.betting_active = False  # Temporalmente inactiva
+                    else:
+                        self._sync_send_message(user_id, f"❌ {account.username}: No se pudo activar pausa")
+                        
+                elif stop_loss_status == "DETENER":
+                    # Detener permanentemente
                     account.betting_active = False
+                    self._sync_send_message(user_id, f"🛑 LÍMITE DE PAUSAS ALCANZADO - {account.username}")
+                    self._sync_send_message(user_id, f"📊 Pausas usadas: {account.current_pauses}/{account.max_pauses}")
+                    self._sync_send_message(user_id, f"💤 Cuenta DETENIDA PERMANENTEMENTE")
+                    self._sync_send_message(user_id, f"💰 Saldo actual: ${account.balance:.2f}")
+                    if account.saldo_recuperado:
+                        self._sync_send_message(user_id, f"✅ Saldo recuperado: Sí")
+                    else:
+                        self._sync_send_message(user_id, f"❌ Saldo recuperado: No (pendiente ${account.saldo_perdido:.2f})")
+                    self._sync_send_message(user_id, f"🔄 Usa /start para reiniciar manualmente")
                 else:
+                    # Continuar normalmente
                     msg = account.update_bet_on_loss()
                     self._sync_send_message(user_id, f"📉 {account.username}: {msg}")
     
@@ -1219,10 +1348,17 @@ class PredictionBot:
         msg = "💰 SALDOS\n\n"
         for acc in session.get('accounts', []):
             acc.get_balance()
-            msg += f"• {acc.username}: ${acc.balance:.2f}\n"
+            msg += f"• {acc.username}: ${acc.balance:.2f}"
+            if acc.paused:
+                msg += f" ⏸️ (PAUSA {acc.current_pauses}/{acc.max_pauses})"
+            if not acc.betting_active and not acc.paused:
+                msg += f" ⛔ (DETENIDA)"
+            msg += "\n"
             if acc.take_profit_amount > 0 and acc.initial_balance_snapshot > 0:
                 profit = acc.balance - acc.initial_balance_snapshot
                 msg += f"  📈 Meta: ${acc.take_profit_amount:.2f} | Ganancia: ${profit:.2f}\n"
+            if acc.saldo_perdido > 0 and acc.paused:
+                msg += f"  📉 Por recuperar: ${acc.saldo_perdido:.2f}\n"
         
         self._sync_send_message(user_id, msg)
     
@@ -1249,7 +1385,9 @@ class PredictionBot:
         keyboard = [
             [InlineKeyboardButton(f"💰 Inicial: ${config['initial_bet']}", callback_data='cfg_initial')],
             [InlineKeyboardButton(f"📈 Máximo: ${config['max_bet']}", callback_data='cfg_max_bet')],
-            [InlineKeyboardButton(f"🛑 Max Losses: {config['max_losses']}", callback_data='cfg_max_losses')],
+            [InlineKeyboardButton(f"🛑 Stop Loss: {config['max_losses']}", callback_data='cfg_max_losses')],
+            [InlineKeyboardButton(f"🔄 Reinicio: ${config.get('restart_bet', 0.1)}", callback_data='cfg_restart_bet')],
+            [InlineKeyboardButton(f"⏸️ Max Pausas: {config.get('max_pauses', 2)}", callback_data='cfg_max_pauses')],
             [InlineKeyboardButton(f"🎲 Modo: {'Martingala' if config['use_martingale'] else 'Agresivo'}", callback_data='cfg_mode')],
             [InlineKeyboardButton(f"🎯 Take Profit: {tp_display}", callback_data='cfg_take_profit')],
             [InlineKeyboardButton("📊 Ver Balances", callback_data='view_balances')],
@@ -1260,10 +1398,15 @@ class PredictionBot:
         msg = (f"⚙️ CONFIGURACIÓN - {modo_texto}\n\n"
                f"💰 Apuesta actual: ${config['current_bet']}\n"
                f"🎲 Modo gestión: {'Martingala (x2)' if config['use_martingale'] else 'Agresivo (x2+inicial)'}\n"
+               f"🛑 Stop Loss: {config['max_losses']} pérdidas consecutivas\n"
+               f"🔄 Reinicio: ${config.get('restart_bet', 0.1)} (después de pausa)\n"
+               f"⏸️ Max Pausas: {config.get('max_pauses', 2)}\n"
                f"🎯 Take Profit: {tp_display}\n\n"
-               f"Ejemplo con $0.10 inicial:\n"
-               f"• Martingala: 0.10 → 0.20 → 0.40 → 0.80\n"
-               f"• Agresivo: 0.10 → 0.30 → 0.70 → 1.50")
+               f"📌 Cuando alcanza el Stop Loss → PAUSA\n"
+               f"📌 Espera un WIN para reiniciar\n"
+               f"📌 Recupera el saldo perdido\n"
+               f"📌 Vuelve a la apuesta inicial original\n"
+               f"📌 Después de {config.get('max_pauses', 2)} pausas → DETENCIÓN PERMANENTE")
         
         if hasattr(update, 'callback_query') and update.callback_query:
             await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1282,8 +1425,27 @@ class PredictionBot:
     
     async def cfg_initial(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text("💰 Envía nuevo monto inicial (mínimo 0.1):")
+        await update.callback_query.edit_message_text(
+            "💰 Envía nuevo monto inicial (mínimo 0.1):\n\n"
+            "Este será el monto base para las apuestas."
+        )
         context.user_data['awaiting_initial_bet'] = True
+    
+    async def cfg_restart_bet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(
+            "🔄 Envía el monto de REINICIO (mínimo 0.1):\n\n"
+            "Este será el monto con el que reiniciará después de una pausa."
+        )
+        context.user_data['awaiting_restart_bet'] = True
+    
+    async def cfg_max_pauses(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(
+            "⏸️ Envía el número máximo de pausas permitidas (1-5):\n\n"
+            "Después de este número, la cuenta se detendrá permanentemente."
+        )
+        context.user_data['awaiting_max_pauses'] = True
     
     async def cfg_max_bet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.answer()
@@ -1292,7 +1454,7 @@ class PredictionBot:
     
     async def cfg_max_losses(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text("🛑 Envía número máximo de pérdidas:")
+        await update.callback_query.edit_message_text("🛑 Envía número máximo de pérdidas consecutivas (1-20):")
         context.user_data['awaiting_max_losses'] = True
     
     async def cfg_take_profit(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1315,16 +1477,64 @@ class PredictionBot:
             if amount < 0.1:
                 await update.message.reply_text("❌ Mínimo 0.1")
                 return
+            
             self.user_sessions[user_id]['bet_config']['initial_bet'] = amount
             self.user_sessions[user_id]['bet_config']['current_bet'] = amount
+            
+            # También actualizar restart_bet si no se ha configurado
+            if self.user_sessions[user_id]['bet_config'].get('restart_bet', 0) == 0:
+                self.user_sessions[user_id]['bet_config']['restart_bet'] = amount
+            
             for acc in self.user_sessions[user_id]['accounts']:
                 acc.initial_bet = amount
+                acc.initial_bet_original = amount
                 acc.current_bet = amount
+                if acc.restart_bet == 0:
+                    acc.restart_bet = amount
+            
             await update.message.reply_text(f"✅ Monto inicial: ${amount:.2f}")
             await self.show_betting_config(update, user_id)
         except:
             await update.message.reply_text("❌ Número inválido")
         context.user_data['awaiting_initial_bet'] = False
+    
+    async def process_restart_bet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        try:
+            amount = float(update.message.text)
+            if amount < 0.1:
+                await update.message.reply_text("❌ Mínimo 0.1")
+                return
+            
+            self.user_sessions[user_id]['bet_config']['restart_bet'] = amount
+            
+            for acc in self.user_sessions[user_id]['accounts']:
+                acc.restart_bet = amount
+            
+            await update.message.reply_text(f"✅ Monto de reinicio: ${amount:.2f}")
+            await self.show_betting_config(update, user_id)
+        except:
+            await update.message.reply_text("❌ Número inválido")
+        context.user_data['awaiting_restart_bet'] = False
+    
+    async def process_max_pauses(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        try:
+            value = int(update.message.text)
+            if value < 1 or value > 5:
+                await update.message.reply_text("❌ Valor entre 1 y 5")
+                return
+            
+            self.user_sessions[user_id]['bet_config']['max_pauses'] = value
+            
+            for acc in self.user_sessions[user_id]['accounts']:
+                acc.max_pauses = value
+            
+            await update.message.reply_text(f"✅ Máximo de pausas: {value}")
+            await self.show_betting_config(update, user_id)
+        except:
+            await update.message.reply_text("❌ Número inválido")
+        context.user_data['awaiting_max_pauses'] = False
     
     async def process_max_bet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -1352,7 +1562,7 @@ class PredictionBot:
             self.user_sessions[user_id]['bet_config']['max_losses'] = value
             for acc in self.user_sessions[user_id]['accounts']:
                 acc.max_consecutive_losses = value
-            await update.message.reply_text(f"✅ Max Losses: {value}")
+            await update.message.reply_text(f"✅ Stop Loss: {value} pérdidas consecutivas")
             await self.show_betting_config(update, user_id)
         except:
             await update.message.reply_text("❌ Número inválido")
@@ -1387,15 +1597,26 @@ class PredictionBot:
         config = self.user_sessions[user_id]['bet_config']
         bot_mode = self.user_sessions[user_id].get('bot_mode', 'hack')
         take_profit_amount = config.get('take_profit', 0)
+        restart_bet = config.get('restart_bet', 0.1)
+        max_pauses = config.get('max_pauses', 2)
         
         for acc in self.user_sessions[user_id]['accounts']:
             acc.initial_bet = config['initial_bet']
+            acc.initial_bet_original = config['initial_bet']
             acc.current_bet = config['initial_bet']
             acc.max_bet = config['max_bet']
             acc.max_consecutive_losses = config['max_losses']
             acc.use_martingale = config['use_martingale']
             acc.consecutive_losses = 0
             acc.betting_active = True
+            acc.restart_bet = restart_bet
+            acc.max_pauses = max_pauses
+            acc.current_pauses = 0
+            acc.paused = False
+            acc.waiting_for_win = False
+            acc.saldo_inicial_pausa = 0.0
+            acc.saldo_perdido = 0.0
+            acc.saldo_recuperado = False
             
             acc.get_balance()
             acc.initial_balance_snapshot = acc.balance
@@ -1420,10 +1641,17 @@ class PredictionBot:
             f"🎯 Reglas:\n{reglas}\n\n"
             f"💰 Inicial: ${config['initial_bet']}\n"
             f"📈 Máximo: ${config['max_bet']}\n"
-            f"🛑 Max Losses: {config['max_losses']}\n"
+            f"🛑 Stop Loss: {config['max_losses']} pérdidas\n"
+            f"🔄 Reinicio: ${restart_bet}\n"
+            f"⏸️ Max Pausas: {max_pauses}\n"
             f"🎲 Gestión: {modo_texto}\n"
             f"🎯 Take Profit: {tp_texto}\n"
             f"📊 Cuentas: {len(self.user_sessions[user_id]['accounts'])}\n\n"
+            f"📌 Cuando alcanza Stop Loss → PAUSA\n"
+            f"📌 Espera WIN para reiniciar\n"
+            f"📌 Recupera el saldo perdido\n"
+            f"📌 Vuelve a la apuesta original\n"
+            f"📌 Después de {max_pauses} pausas → DETENCIÓN PERMANENTE\n\n"
             f"Usa /stop para detener."
         )
     
@@ -1437,10 +1665,19 @@ class PredictionBot:
         msg = "💰 BALANCES\n\n"
         for acc in session.get('accounts', []):
             acc.get_balance()
-            msg += f"• {acc.username}: ${acc.balance:.2f}\n"
+            msg += f"• {acc.username}: ${acc.balance:.2f}"
+            if acc.paused:
+                msg += f" ⏸️ (PAUSA {acc.current_pauses}/{acc.max_pauses})"
+            if not acc.betting_active and not acc.paused:
+                msg += f" ⛔ (DETENIDA)"
+            msg += "\n"
             if acc.take_profit_amount > 0 and acc.initial_balance_snapshot > 0:
                 profit = acc.balance - acc.initial_balance_snapshot
-                msg += f"  📈 Inicial: ${acc.initial_balance_snapshot:.2f} | Meta: +${acc.take_profit_amount:.2f} | Ganancia: ${profit:.2f}\n"
+                msg += f"  📈 Meta: ${acc.take_profit_amount:.2f} | Ganancia: ${profit:.2f}\n"
+            if acc.saldo_perdido > 0 and acc.paused:
+                msg += f"  📉 Por recuperar: ${acc.saldo_perdido:.2f}\n"
+            if acc.saldo_recuperado:
+                msg += f"  ✅ Saldo recuperado\n"
         
         await update.callback_query.edit_message_text(msg)
     
@@ -1676,6 +1913,10 @@ class PredictionBot:
             await self.process_credentials(update, context)
         elif context.user_data.get('awaiting_initial_bet'):
             await self.process_initial_bet(update, context)
+        elif context.user_data.get('awaiting_restart_bet'):
+            await self.process_restart_bet(update, context)
+        elif context.user_data.get('awaiting_max_pauses'):
+            await self.process_max_pauses(update, context)
         elif context.user_data.get('awaiting_max_bet'):
             await self.process_max_bet(update, context)
         elif context.user_data.get('awaiting_max_losses'):
@@ -1707,6 +1948,8 @@ class PredictionBot:
         self.application.add_handler(CallbackQueryHandler(self.select_plan, pattern='plan_'))
         self.application.add_handler(CallbackQueryHandler(self.send_payment_proof, pattern='send_payment_proof'))
         self.application.add_handler(CallbackQueryHandler(self.cfg_initial, pattern='cfg_initial'))
+        self.application.add_handler(CallbackQueryHandler(self.cfg_restart_bet, pattern='cfg_restart_bet'))
+        self.application.add_handler(CallbackQueryHandler(self.cfg_max_pauses, pattern='cfg_max_pauses'))
         self.application.add_handler(CallbackQueryHandler(self.cfg_max_bet, pattern='cfg_max_bet'))
         self.application.add_handler(CallbackQueryHandler(self.cfg_max_losses, pattern='cfg_max_losses'))
         self.application.add_handler(CallbackQueryHandler(self.cfg_take_profit, pattern='cfg_take_profit'))
@@ -1720,7 +1963,7 @@ class PredictionBot:
         self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_any_photo))
         
         print("=" * 60)
-        print("🎰 PREDICTOR BOT V4 - HACK + PEAK BREAK + CAZADOR + TENDENCIAL")
+        print("🎰 PREDICTOR BOT V5 - CON PAUSA Y REINICIO")
         print("=" * 60)
         print("💰 PLANES DE LICENCIA:")
         print("  • 🔧 Hack 30d: 15 USDT (1 cuenta) - Estrategia #3 Anti-sistema")
@@ -1728,30 +1971,14 @@ class PredictionBot:
         print("  • 🎯 Cazador 90d: 50 USDT (1 cuenta) - Patrones DOBLE y TRIPLE con BLOQUEO")
         print("  • 📊 Tendencial 75d: 45 USDT (1 cuenta) - Ciclo fijo 2-3-2-3")
         print("=" * 60)
-        print("🎯 ESTRATEGIA HACK (#3):")
-        print("  • Sigue el último color que sale")
-        print("  • Si falla 2 veces seguidas → activa MODO ANTI por 2 rondas")
-        print("=" * 60)
-        print("🎯 ESTRATEGIA PEAK BREAK V2:")
-        print("  • Hereda la lógica de predicción HACK")
-        print("  • Se activa con WIN + N LOSS (N=1 o 2, cíclico)")
-        print("  • Sigue apostando mientras ganes")
-        print("=" * 60)
-        print("🎯 ESTRATEGIA CAZADOR:")
-        print("  • ESPERA EL PRIMER CAMBIO DE COLOR para activarse")
-        print("  • Busca patrones DOBLE y TRIPLE")
-        print("  • Apuesta al color contrario")
-        print("  • BLOQUEA el color del patrón al completarlo")
-        print("=" * 60)
-        print("🎯 ESTRATEGIA TENDENCIAL:")
-        print("  • Espera el PRIMER COLOR que sale")
-        print("  • Ciclo fijo: 2-3-2-3 (2 del primero, 3 del contrario)")
-        print("  • NO cambia por WIN/LOSS, solo sigue el ciclo")
-        print("  • PERO muestra el resultado de cada apuesta (WIN/LOSS)")
-        print("=" * 60)
-        print("🎯 TAKE PROFIT:")
-        print("  • Monto fijo por cuenta")
-        print("  • Imagen especial al alcanzarlo")
+        print("🔄 SISTEMA DE PAUSA Y REINICIO:")
+        print("  • Cuando alcanza Stop Loss → PAUSA (espera WIN)")
+        print("  • Al detectar WIN → REINICIA con monto configurado")
+        print("  • RECUPERA el saldo perdido")
+        print("  • Vuelve a la APUESTA INICIAL ORIGINAL")
+        print("  • Notifica cuando el saldo se recupera")
+        print("  • Máximo de pausas configurable (1-5)")
+        print("  • Al llegar al límite → DETENCIÓN PERMANENTE")
         print("=" * 60)
         print("✅ BOT LISTO")
         print("=" * 60)
@@ -1759,6 +1986,6 @@ class PredictionBot:
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    print("🚀 INICIANDO PREDICTOR BOT V4...")
+    print("🚀 INICIANDO PREDICTOR BOT V5...")
     bot = PredictionBot(BOT_TOKEN)
     bot.run()
