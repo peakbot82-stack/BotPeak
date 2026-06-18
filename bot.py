@@ -1,5 +1,5 @@
 # bot.py - PREDICTOR BOT V5 (HACK + PEAK BREAK V2 + CAZADOR + TENDENCIAL)
-# CON SISTEMA DE PAUSA Y REINICIO CON RECUPERACIÓN DE SALDO
+# CON SISTEMA DE PAUSA Y REINICIO CON RECUPERACIÓN DE SALDO - CORREGIDO
 
 import json
 import os
@@ -98,7 +98,7 @@ class UserAccount:
         self.balance = 0.0
         self.logged_in = False
         self.initial_bet = 0.1
-        self.initial_bet_original = 0.1  # Guardar la apuesta inicial original
+        self.initial_bet_original = 0.1
         self.current_bet = 0.1
         self.max_consecutive_losses = 5
         self.max_bet = 10.0
@@ -212,36 +212,31 @@ class UserAccount:
     def activate_pause(self) -> bool:
         """Activa el modo pausa y guarda el saldo"""
         if self.current_pauses >= self.max_pauses:
-            return False  # Límite alcanzado
+            return False
         
         self.paused = True
         self.waiting_for_win = True
         self.current_pauses += 1
         self.saldo_inicial_pausa = self.balance
-        self.saldo_perdido = 0  # Se calculará en el mensaje
+        self.saldo_perdido = 0
         self.saldo_recuperado = False
+        self.betting_active = False
         return True
     
-    def check_pause_and_restart(self, color, prediction) -> tuple:
-        """
-        Verifica si debe reactivarse después de una pausa
-        Retorna: (reactivado, mensaje)
-        """
+    def reactivate_from_pause(self) -> bool:
+        """Reactiva la cuenta desde pausa (cuando hay WIN)"""
         if not self.paused:
-            return False, None
+            return False
         
-        # Si está en pausa, verificar si hay WIN
-        if prediction is not None and prediction == color:
-            # ¡WIN DETECTADO! Reactivar
-            self.paused = False
-            self.waiting_for_win = False
-            self.current_bet = self.restart_bet
-            self.initial_bet = self.restart_bet
-            self.consecutive_losses = 0
-            self.saldo_recuperado = False
-            return True, "REACTIVADO"
-        
-        return False, None
+        self.paused = False
+        self.waiting_for_win = False
+        self.current_bet = self.restart_bet
+        self.initial_bet = self.restart_bet
+        self.consecutive_losses = 0
+        self.betting_active = True
+        self.saldo_recuperado = False
+        self.saldo_perdido = self.saldo_inicial_pausa - self.balance if self.saldo_inicial_pausa > 0 else 0
+        return True
     
     def check_saldo_recuperado(self) -> bool:
         """Verifica si ya recuperó el saldo perdido"""
@@ -250,9 +245,7 @@ class UserAccount:
         
         ganancia_actual = self.balance - self.saldo_inicial_pausa
         if ganancia_actual >= self.saldo_perdido:
-            # ¡Saldo recuperado!
             self.saldo_recuperado = True
-            # Volver a la apuesta inicial ORIGINAL
             self.current_bet = self.initial_bet_original
             self.initial_bet = self.initial_bet_original
             return True
@@ -263,9 +256,9 @@ class UserAccount:
         """Verifica si alcanzó el stop loss y debe pausar"""
         if self.consecutive_losses >= self.max_consecutive_losses:
             if self.current_pauses < self.max_pauses:
-                return "PAUSAR"  # Pausar, aún hay intentos
+                return "PAUSAR"
             else:
-                return "DETENER"  # Detener permanentemente
+                return "DETENER"
         return "CONTINUAR"
     
     def reset_pause_system(self):
@@ -281,14 +274,8 @@ class UserAccount:
         self.initial_bet = self.initial_bet_original
         self.consecutive_losses = 0
 
-# ==================== PREDICTOR HACK (ESTRATEGIA #3) ====================
+# ==================== PREDICTOR HACK ====================
 class HackPredictor:
-    """
-    ESTRATEGIA HACK (#3) - Anti-sistema:
-    - Sigue el último color
-    - 2 pérdidas consecutivas activan modo ANTI por 2 rondas
-    - Modo ANTI: apuesta al color contrario del segundo color perdido
-    """
     def __init__(self, user_id: int):
         self.user_id = user_id
         self.session_history = []
@@ -320,7 +307,6 @@ class HackPredictor:
         
         color = self._normalizar_color(color)
         
-        # 1. VERIFICAR RESULTADO DE APUESTA ANTERIOR
         if self.last_prediction is not None:
             is_win = (self.last_prediction == color)
             
@@ -343,12 +329,10 @@ class HackPredictor:
             
             self.last_prediction = None
         
-        # 2. AGREGAR COLOR AL HISTORIAL
         self.session_history.append(color)
         if len(self.session_history) > 20:
             self.session_history = self.session_history[-20:]
         
-        # 3. MANEJO DEL MODO ANTI
         if self.anti_mode:
             if self.anti_rounds_left > 0:
                 self.last_prediction = self.anti_color
@@ -359,7 +343,6 @@ class HackPredictor:
                     self.on_prediction(f"🛡️ MODO ANTI ({rounds_done}/2): {'🔴' if self.anti_color == 'red' else '🔵'}")
                 return
         
-        # 4. DETECTAR PÉRDIDAS PARA ACTIVAR MODO ANTI
         if not self.anti_mode:
             if self.consecutive_losses == 1:
                 self.first_lost_color = color
@@ -381,7 +364,6 @@ class HackPredictor:
                     self.on_prediction(f"🛡️ MODO ANTI (1/2): {'🔴' if self.anti_color == 'red' else '🔵'}")
                 return
         
-        # 5. ESTRATEGIA NORMAL: SEGUIR EL ÚLTIMO COLOR
         if self.session_history:
             last_color = self.session_history[-1]
             self.last_prediction = last_color
@@ -390,11 +372,9 @@ class HackPredictor:
                 self.on_prediction(f"🎯 SIGUIENTE: {'🔴' if last_color == 'red' else '🔵'}")
     
     def get_last_prediction(self) -> str:
-        """Obtiene la última predicción que se hizo"""
         return self.last_prediction
     
     def get_previous_prediction(self) -> str:
-        """Obtiene la predicción anterior (antes de la última)"""
         if len(self.session_history) >= 2:
             return self.session_history[-2]
         return None
@@ -410,16 +390,8 @@ class HackPredictor:
         self.first_lost_color = None
         self.second_lost_color = None
 
-# ==================== PREDICTOR PEAK BREAK V2 CORREGIDO ====================
+# ==================== PREDICTOR PEAK BREAK V2 ====================
 class PeakBreakPredictorV2:
-    """
-    ESTRATEGIA PEAK BREAK V2 CORREGIDA:
-    - Hereda la lógica de predicción HACK
-    - Solo apuesta cuando está en MODO ACTIVO
-    - Detecta WIN/LOSS comparando la predicción REAL con el color REAL
-    - Se activa tras WIN + N LOSS (N=1 o 2, cíclico)
-    - Se desactiva (pausa) tras un LOSS
-    """
     def __init__(self, user_id: int):
         self.user_id = user_id
         self.hack_predictor = HackPredictor(user_id)
@@ -427,17 +399,15 @@ class PeakBreakPredictorV2:
         self.on_prediction = None
         self.on_result = None
         
-        # Estado PEAK BREAK
-        self.active_mode = False          # True = puede apostar
-        self.waiting_for_win = True       # Esperando WIN para activar
-        self.last_bet_prediction = None   # Última predicción que se apostó
-        self.pending_bet = False          # Hay una apuesta pendiente de resultado
-        self.last_winner_color = None     # Último color que ganó
+        self.active_mode = False
+        self.waiting_for_win = True
+        self.last_bet_prediction = None
+        self.pending_bet = False
+        self.last_winner_color = None
         
-        # NUEVA LÓGICA: WIN + N LOSS
-        self.required_losses = 1          # N actual (1 o 2)
-        self.win_detected = False         # Se ha detectado un WIN
-        self.losses_count = 0             # Conteo de LOSS después del WIN
+        self.required_losses = 1
+        self.win_detected = False
+        self.losses_count = 0
     
     def _normalizar_color(self, color: str) -> str:
         return self.hack_predictor._normalizar_color(color)
@@ -448,30 +418,23 @@ class PeakBreakPredictorV2:
         
         color = self._normalizar_color(color)
         
-        # ============================================
-        # 1. VERIFICAR RESULTADO DE APUESTA PENDIENTE
-        # ============================================
         if self.pending_bet and self.last_bet_prediction is not None:
             is_win = (self.last_bet_prediction == color)
             
             if self.on_result:
                 if is_win:
                     self.on_result(f"✅ WIN (PEAK BREAK)", True)
-                    # SEGUIR APOSTANDO - No desactivar
                     self.active_mode = True
                     self.waiting_for_win = False
                     self.last_winner_color = color
-                    # Resetear contadores de activación
                     self.win_detected = False
                     self.losses_count = 0
                     self.required_losses = 1
                 else:
                     self.on_result(f"❌ LOSS (PEAK BREAK)", False)
-                    # DESACTIVAR - Esperar WIN + N LOSS
                     self.active_mode = False
                     self.waiting_for_win = True
                     self.last_winner_color = None
-                    # Iniciar búsqueda de activación
                     self.win_detected = False
                     self.losses_count = 0
                     self.required_losses = 1
@@ -479,31 +442,21 @@ class PeakBreakPredictorV2:
             self.pending_bet = False
             self.last_bet_prediction = None
         
-        # ============================================
-        # 2. ACTUALIZAR PREDICTOR HACK
-        # ============================================
         previous_prediction = self.hack_predictor.get_last_prediction()
-        
         self.hack_predictor.process_color(color)
         
-        # ============================================
-        # 3. LÓGICA DE ACTIVACIÓN: WIN + N LOSS
-        # ============================================
         if not self.active_mode and self.waiting_for_win and not self.pending_bet:
-            # Verificar si hubo WIN
             if previous_prediction is not None and previous_prediction == color:
                 self.win_detected = True
                 self.losses_count = 0
                 if self.on_prediction:
                     self.on_prediction(f"🔍 WIN detectado - Buscando {self.required_losses} LOSS para activar")
             
-            # Si tenemos WIN, contar LOSS
             elif self.win_detected and not (previous_prediction is not None and previous_prediction == color):
                 self.losses_count += 1
                 if self.on_prediction:
                     self.on_prediction(f"🔍 LOSS {self.losses_count}/{self.required_losses}")
                 
-                # Si alcanzamos el número requerido de LOSS → ACTIVAR
                 if self.losses_count >= self.required_losses:
                     self.active_mode = True
                     self.waiting_for_win = False
@@ -511,7 +464,6 @@ class PeakBreakPredictorV2:
                     self.win_detected = False
                     self.losses_count = 0
                     
-                    # Alternar N entre 1 y 2 para la próxima activación
                     if self.required_losses == 1:
                         self.required_losses = 2
                     else:
@@ -520,15 +472,10 @@ class PeakBreakPredictorV2:
                     if self.on_prediction:
                         self.on_prediction(f"⛰️ PEAK BREAK ACTIVADO! (WIN + {self.required_losses} LOSS)")
             
-            # Si hay otro LOSS sin WIN, resetear (volver a buscar WIN)
             elif not self.win_detected:
                 self.losses_count = 0
         
-        # ============================================
-        # 4. GENERAR APUESTA SI ESTAMOS ACTIVOS
-        # ============================================
         if self.active_mode and not self.pending_bet:
-            # Obtener la predicción actual del HACK
             if self.hack_predictor.last_prediction:
                 pred = self.hack_predictor.last_prediction
             else:
@@ -552,37 +499,23 @@ class PeakBreakPredictorV2:
         self.win_detected = False
         self.losses_count = 0
 
-# ==================== PREDICTOR CAZADOR (PATRONES DOBLE Y TRIPLE CON BLOQUEO) ====================
+# ==================== PREDICTOR CAZADOR ====================
 class CazadorPredictor:
-    """
-    ESTRATEGIA CAZADOR CORREGIDA:
-    - Busca patrones DOBLE (🔴🔴 o 🔵🔵) y TRIPLE (🔴🔴🔴 o 🔵🔵🔵)
-    - Apuesta al color contrario
-    - Si falla en DOBLE, se convierte en TRIPLE y apuesta de nuevo
-    - Al WIN o LOSS en TRIPLE, BLOQUEA el color del patrón
-    - No detecta patrones del color bloqueado hasta que aparezca el color contrario
-    - ESPERA EL PRIMER CAMBIO DE COLOR ANTES DE ACTIVARSE
-    """
     def __init__(self, user_id: int):
         self.user_id = user_id
         self.active = True
         self.on_prediction = None
         self.on_result = None
         
-        # Estado CAZADOR
         self.ultimos_colores = []
-        self.estado = "BUSCANDO"  # BUSCANDO | DOBLE | TRIPLE
-        self.patron_color = None  # 'red' o 'blue'
-        self.patron_tipo = None   # 'doble' o 'triple'
+        self.estado = "BUSCANDO"
+        self.patron_color = None
+        self.patron_tipo = None
         self.apuesta_pendiente = False
         self.apuesta_color = None
         self.esperando_resultado = False
-        
-        # Control del primer cambio de color
         self.primer_cambio_detectado = False
-        
-        # Control de color bloqueado
-        self.color_bloqueado = None  # 'red' o 'blue' - No detectar este color
+        self.color_bloqueado = None
     
     def _normalizar_color(self, color: str) -> str:
         if color is None:
@@ -601,30 +534,19 @@ class CazadorPredictor:
         return 'blue' if color == 'red' else 'red'
     
     def _buscar_patron(self, colores, color_bloqueado=None):
-        """
-        Busca el patrón más RECIENTE en TODO el historial
-        PRIORIZA TRIPLE sobre DOBLE
-        IGNORA el color bloqueado
-        """
         if len(colores) < 2:
             return None, None
         
-        # 1. Buscar TRIPLE (más específico)
         if len(colores) >= 3:
-            # Buscar de atrás hacia adelante (más reciente primero)
             for i in range(len(colores) - 3, -1, -1):
                 color = colores[i]
-                # Si el color está bloqueado, ignorar
                 if color_bloqueado is not None and color == color_bloqueado:
                     continue
                 if colores[i] == colores[i+1] == colores[i+2]:
                     return color, "triple"
         
-        # 2. Buscar DOBLE
-        # Buscar de atrás hacia adelante (más reciente primero)
         for i in range(len(colores) - 2, -1, -1):
             color = colores[i]
-            # Si el color está bloqueado, ignorar
             if color_bloqueado is not None and color == color_bloqueado:
                 continue
             if colores[i] == colores[i+1]:
@@ -638,9 +560,6 @@ class CazadorPredictor:
         
         color = self._normalizar_color(color)
         
-        # ============================================
-        # 1. VERIFICAR RESULTADO DE APUESTA PENDIENTE
-        # ============================================
         if self.esperando_resultado and self.apuesta_color is not None:
             is_win = (self.apuesta_color == color)
             
@@ -650,7 +569,6 @@ class CazadorPredictor:
                 else:
                     self.on_result(f"❌ LOSS (CAZADOR)", False)
             
-            # Si estábamos en DOBLE y perdimos, pasar a TRIPLE
             if self.estado == "DOBLE" and not is_win:
                 if self.on_prediction:
                     self.on_prediction(f"🔄 DOBLE falló - Activando TRIPLE: {self._color_emoji(self.patron_color)}")
@@ -659,11 +577,9 @@ class CazadorPredictor:
                 self.apuesta_pendiente = False
                 self.esperando_resultado = False
                 self.apuesta_color = None
-                # Generar nueva apuesta para TRIPLE
                 self._generar_apuesta()
                 return
             
-            # Si estábamos en TRIPLE o ganamos en DOBLE → Resetear
             else:
                 if self.on_prediction:
                     if is_win:
@@ -671,50 +587,33 @@ class CazadorPredictor:
                     else:
                         self.on_prediction("❌ Patrón falló - Buscando nuevo patrón")
                 
-                # ⭐ BLOQUEAR EL COLOR DEL PATRÓN
                 if self.patron_color is not None:
                     self.color_bloqueado = self.patron_color
                     if self.on_prediction:
                         self.on_prediction(f"🚫 BLOQUEADO: {self._color_emoji(self.color_bloqueado)} (esperando {self._color_emoji(self._color_contrario(self.color_bloqueado))})")
                 
-                # Resetear todo, pero mantener historial
                 self.estado = "BUSCANDO"
                 self.patron_color = None
                 self.patron_tipo = None
                 self.apuesta_pendiente = False
                 self.esperando_resultado = False
                 self.apuesta_color = None
-                # NO LIMPIAR EL HISTORIAL
                 return
         
-        # ============================================
-        # 2. AGREGAR COLOR AL HISTORIAL
-        # ============================================
         self.ultimos_colores.append(color)
         if len(self.ultimos_colores) > 20:
             self.ultimos_colores = self.ultimos_colores[-20:]
         
-        # ============================================
-        # 3. ESPERAR EL PRIMER CAMBIO DE COLOR
-        # ============================================
         if not self.primer_cambio_detectado:
             if len(self.ultimos_colores) >= 2:
-                # Si el último color es diferente al anterior → HAY CAMBIO
                 if self.ultimos_colores[-1] != self.ultimos_colores[-2]:
                     self.primer_cambio_detectado = True
                     if self.on_prediction:
                         self.on_prediction("🔍 CAZADOR ACTIVADO - Buscando patrones")
-            # Si no hay cambio, salimos (NO buscamos patrones)
             if not self.primer_cambio_detectado:
                 return
         
-        # ============================================
-        # 4. BUSCAR PATRONES EN TODO EL HISTORIAL
-        # ============================================
         if not self.apuesta_pendiente and not self.esperando_resultado and self.estado == "BUSCANDO":
-            
-            # Buscar el mejor patrón en TODO el historial
-            # ⭐ IGNORANDO EL COLOR BLOQUEADO
             patron_color, patron_tipo = self._buscar_patron(self.ultimos_colores, self.color_bloqueado)
             
             if patron_color is not None:
@@ -733,7 +632,6 @@ class CazadorPredictor:
                 self._generar_apuesta()
     
     def _generar_apuesta(self):
-        """Genera apuesta al color contrario del patrón"""
         if self.patron_color is None:
             return
         
@@ -758,31 +656,21 @@ class CazadorPredictor:
         self.primer_cambio_detectado = False
         self.color_bloqueado = None
 
-# ==================== PREDICTOR TENDENCIAL (CICLO FIJO 2-3-2-3) ====================
+# ==================== PREDICTOR TENDENCIAL ====================
 class TendencialPredictor:
-    """
-    ESTRATEGIA TENDENCIAL:
-    - Espera el primer color que sale
-    - Ciclo fijo: 2 del primer color, 3 del contrario, 2, 3, 2, 3...
-    - NO cambia por WIN/LOSS, solo sigue el ciclo
-    - PERO muestra el resultado de cada apuesta (WIN/LOSS)
-    """
     def __init__(self, user_id: int):
         self.user_id = user_id
         self.active = True
         self.on_prediction = None
         self.on_result = None
         
-        # Estado TENDENCIAL
-        self.estado = "ESPERANDO"  # ESPERANDO | ACTIVO
-        self.primer_color = None   # 'red' o 'blue'
-        self.ciclo_actual = None   # 'primario' (2) o 'secundario' (3)
+        self.estado = "ESPERANDO"
+        self.primer_color = None
+        self.ciclo_actual = None
         self.rondas_actuales = 0
         self.color_apuesta = None
         self.apuesta_pendiente = False
         self.esperando_resultado = False
-        
-        # Guardar la última predicción para verificar WIN/LOSS
         self.ultima_prediccion = None
     
     def _normalizar_color(self, color: str) -> str:
@@ -802,28 +690,22 @@ class TendencialPredictor:
         return 'blue' if color == 'red' else 'red'
     
     def _calcular_siguiente_apuesta(self):
-        """Calcula la siguiente apuesta según el ciclo fijo"""
         if self.primer_color is None:
             return None
         
-        # Si estamos en PRIMARIO (2 rondas)
         if self.ciclo_actual == "primario":
             if self.rondas_actuales < 2:
                 self.rondas_actuales += 1
                 return self.primer_color
             else:
-                # Cambiar a SECUNDARIO
                 self.ciclo_actual = "secundario"
                 self.rondas_actuales = 1
                 return self._color_contrario(self.primer_color)
-        
-        # Si estamos en SECUNDARIO (3 rondas)
-        else:  # "secundario"
+        else:
             if self.rondas_actuales < 3:
                 self.rondas_actuales += 1
                 return self._color_contrario(self.primer_color)
             else:
-                # Cambiar a PRIMARIO
                 self.ciclo_actual = "primario"
                 self.rondas_actuales = 1
                 return self.primer_color
@@ -834,9 +716,6 @@ class TendencialPredictor:
         
         color = self._normalizar_color(color)
         
-        # ============================================
-        # 1. VERIFICAR RESULTADO DE APUESTA PENDIENTE
-        # ============================================
         if self.esperando_resultado and self.ultima_prediccion is not None:
             is_win = (self.ultima_prediccion == color)
             
@@ -850,9 +729,6 @@ class TendencialPredictor:
             self.ultima_prediccion = None
             self.apuesta_pendiente = False
         
-        # ============================================
-        # 2. ESPERAR EL PRIMER COLOR
-        # ============================================
         if self.estado == "ESPERANDO":
             self.primer_color = color
             self.estado = "ACTIVO"
@@ -863,7 +739,6 @@ class TendencialPredictor:
                 self.on_prediction(f"📊 TENDENCIAL ACTIVADO - Primer color: {self._color_emoji(color)}")
                 self.on_prediction(f"📊 Ciclo: {self._color_emoji(color)}{self._color_emoji(color)}{self._color_emoji(self._color_contrario(color))}{self._color_emoji(self._color_contrario(color))}{self._color_emoji(self._color_contrario(color))} ...")
             
-            # Generar primera apuesta
             self.color_apuesta = self.primer_color
             self.apuesta_pendiente = True
             self.esperando_resultado = True
@@ -873,9 +748,6 @@ class TendencialPredictor:
                 self.on_prediction(f"🎯 TENDENCIAL (1/2): {self._color_emoji(self.color_apuesta)}")
             return
         
-        # ============================================
-        # 3. SI ESTAMOS ACTIVOS, CALCULAR SIGUIENTE APUESTA
-        # ============================================
         if self.estado == "ACTIVO" and not self.apuesta_pendiente:
             siguiente = self._calcular_siguiente_apuesta()
             
@@ -885,7 +757,6 @@ class TendencialPredictor:
                 self.esperando_resultado = True
                 self.ultima_prediccion = self.color_apuesta
                 
-                # Mostrar la apuesta con información del ciclo
                 if self.ciclo_actual == "primario":
                     emoji = self._color_emoji(self.color_apuesta)
                     self.on_prediction(f"🎯 TENDENCIAL ({self.rondas_actuales}/2): {emoji}")
@@ -1203,7 +1074,6 @@ class PredictionBot:
             if not self.global_polling.running:
                 self.global_polling.start()
             
-            # FUNCIÓN ON_PREDICTION - Ejecuta apuesta para cualquier mensaje con color
             def on_prediction(msg):
                 self._sync_send_message(user_id, msg)
                 if self.user_sessions.get(user_id, {}).get('auto_betting_active'):
@@ -1234,8 +1104,8 @@ class PredictionBot:
                     'max_losses': 5,
                     'use_martingale': False,
                     'take_profit': 0.0,
-                    'restart_bet': 0.1,      # NUEVO: Monto de reinicio
-                    'max_pauses': 2,           # NUEVO: Máximo de pausas
+                    'restart_bet': 0.1,
+                    'max_pauses': 2,
                 }
             }
             await self.show_betting_config(update, user_id)
@@ -1251,7 +1121,7 @@ class PredictionBot:
             return
         
         for account in session.get('accounts', []):
-            # ⭐ NUEVO: Si está en pausa, no apostar
+            # ⭐ Si está en pausa, no apostar
             if account.paused:
                 continue
             
@@ -1276,6 +1146,17 @@ class PredictionBot:
             return
         
         for account in session.get('accounts', []):
+            # ⭐ REACTIVAR DESDE PAUSA SI HAY WIN
+            if account.paused and won:
+                account.reactivate_from_pause()
+                self._sync_send_message(user_id, f"✅ WIN DETECTADO - ¡CUENTA REACTIVADA!")
+                self._sync_send_message(user_id, f"🔄 Reiniciando apuestas a: ${account.restart_bet:.2f}")
+                self._sync_send_message(user_id, f"💰 {account.username}: Apuesta reiniciada")
+                self._sync_send_message(user_id, f"📊 Contador de pérdidas: 0/{account.max_consecutive_losses}")
+                if account.saldo_perdido > 0:
+                    self._sync_send_message(user_id, f"🎯 OBJETIVO: Recuperar ${account.saldo_perdido:.2f} perdidos")
+                continue
+            
             if not account.betting_active:
                 continue
             
@@ -1283,7 +1164,7 @@ class PredictionBot:
                 account.wins += 1
                 account.reset_bet()
                 
-                # ⭐ NUEVO: Verificar si recuperó el saldo
+                # Verificar si recuperó el saldo
                 if account.saldo_perdido > 0 and not account.saldo_recuperado:
                     if account.check_saldo_recuperado():
                         self._sync_send_message(user_id, f"🎉 ¡SALDO RECUPERADO! - {account.username}")
@@ -1304,13 +1185,15 @@ class PredictionBot:
                     self._sync_send_take_profit_image(user_id)
                     
             else:
+                # Si está en pausa y es LOSS, ignorar (no contar pérdidas durante pausa)
+                if account.paused:
+                    continue
+                
                 account.losses += 1
                 
-                # ⭐ NUEVO: Verificar stop loss con sistema de pausas
                 stop_loss_status = account.check_stop_loss()
                 
                 if stop_loss_status == "PAUSAR":
-                    # Activar pausa
                     account.saldo_perdido = account.balance - account.saldo_inicial_pausa if account.saldo_inicial_pausa > 0 else 0
                     if account.activate_pause():
                         self._sync_send_message(user_id, f"🛑 STOP LOSS ALCANZADO - {account.username}")
@@ -1319,12 +1202,11 @@ class PredictionBot:
                         self._sync_send_message(user_id, f"💰 Saldo perdido: ${account.saldo_perdido:.2f}")
                         self._sync_send_message(user_id, f"💤 Cuenta en PAUSA #{account.current_pauses}/{account.max_pauses} - Esperando WIN para reiniciar")
                         self._sync_send_message(user_id, f"🔄 Monto de reinicio: ${account.restart_bet:.2f}")
-                        account.betting_active = False  # Temporalmente inactiva
+                        account.betting_active = False
                     else:
                         self._sync_send_message(user_id, f"❌ {account.username}: No se pudo activar pausa")
                         
                 elif stop_loss_status == "DETENER":
-                    # Detener permanentemente
                     account.betting_active = False
                     self._sync_send_message(user_id, f"🛑 LÍMITE DE PAUSAS ALCANZADO - {account.username}")
                     self._sync_send_message(user_id, f"📊 Pausas usadas: {account.current_pauses}/{account.max_pauses}")
@@ -1336,7 +1218,6 @@ class PredictionBot:
                         self._sync_send_message(user_id, f"❌ Saldo recuperado: No (pendiente ${account.saldo_perdido:.2f})")
                     self._sync_send_message(user_id, f"🔄 Usa /start para reiniciar manualmente")
                 else:
-                    # Continuar normalmente
                     msg = account.update_bet_on_loss()
                     self._sync_send_message(user_id, f"📉 {account.username}: {msg}")
     
@@ -1481,7 +1362,6 @@ class PredictionBot:
             self.user_sessions[user_id]['bet_config']['initial_bet'] = amount
             self.user_sessions[user_id]['bet_config']['current_bet'] = amount
             
-            # También actualizar restart_bet si no se ha configurado
             if self.user_sessions[user_id]['bet_config'].get('restart_bet', 0) == 0:
                 self.user_sessions[user_id]['bet_config']['restart_bet'] = amount
             
@@ -1963,7 +1843,7 @@ class PredictionBot:
         self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_any_photo))
         
         print("=" * 60)
-        print("🎰 PREDICTOR BOT V5 - CON PAUSA Y REINICIO")
+        print("🎰 PREDICTOR BOT V5 - CON PAUSA Y REINICIO (CORREGIDO)")
         print("=" * 60)
         print("💰 PLANES DE LICENCIA:")
         print("  • 🔧 Hack 30d: 15 USDT (1 cuenta) - Estrategia #3 Anti-sistema")
