@@ -1,5 +1,6 @@
 # bot.py - PREDICTOR BOT V6 (HACK + PEAK BREAK V2 + CAZADOR + TENDENCIAL + PRO)
 # CON SISTEMA DE PAUSA Y REINICIO CON RECUPERACIÓN DE SALDO
+# MODO PRO CORREGIDO: TRIPLE siempre vuelve a BASE (WIN o LOSS)
 
 import json
 import os
@@ -213,7 +214,6 @@ class UserAccount:
     def activate_pause(self) -> bool:
         if self.current_pauses >= self.max_pauses:
             return False
-        
         self.paused = True
         self.waiting_for_win = True
         self.current_pauses += 1
@@ -226,7 +226,6 @@ class UserAccount:
     def reactivate_from_pause(self) -> bool:
         if not self.paused:
             return False
-        
         self.paused = False
         self.waiting_for_win = False
         self.current_bet = self.restart_bet
@@ -240,14 +239,12 @@ class UserAccount:
     def check_saldo_recuperado(self) -> bool:
         if self.saldo_perdido <= 0:
             return False
-        
         ganancia_actual = self.balance - self.saldo_inicial_pausa
         if ganancia_actual >= self.saldo_perdido:
             self.saldo_recuperado = True
             self.current_bet = self.initial_bet_original
             self.initial_bet = self.initial_bet_original
             return True
-        
         return False
     
     def check_stop_loss(self) -> str:
@@ -765,13 +762,13 @@ class TendencialPredictor:
         self.esperando_resultado = False
         self.ultima_prediccion = None
 
-# ==================== PREDICTOR PRO ====================
+# ==================== PREDICTOR PRO CORREGIDO ====================
 class ProPredictor:
     """
-    ESTRATEGIA PRO:
+    ESTRATEGIA PRO CORREGIDA:
     - Siempre comienza en BASE (seguir color)
     - DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE
-    - TRIPLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → sigue TRIPLE
+    - TRIPLE: apuesta CONTRARIO, SIEMPRE vuelve a BASE (tanto WIN como LOSS)
     - ALTERNANCIA: se mantiene hasta que rompa, luego BASE
     - PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE
     """
@@ -878,10 +875,12 @@ class ProPredictor:
                     self.consecutive_wins += 1
                     self.consecutive_losses = 0
                     
-                    # Si estábamos en DOBLE o TRIPLE y GANAMOS → Volver a BASE
+                    # ⭐ SI ESTÁBAMOS EN DOBLE O TRIPLE Y GANAMOS → VOLVER A BASE
                     if self.modo_actual in ["DOBLE", "TRIPLE"]:
                         self.modo_actual = "BASE"
                         self.patron_color = None
+                        # Limpiar historial para no repetir patrón
+                        self.session_history = []
                         if self.on_prediction:
                             self.on_prediction(f"🔄 PRO: Volviendo a BASE")
                     
@@ -894,20 +893,25 @@ class ProPredictor:
                     self.consecutive_losses += 1
                     self.consecutive_wins = 0
                     
-                    # Si estábamos en DOBLE y PERDIMOS → Pasar a TRIPLE
+                    # ⭐ SI ESTÁBAMOS EN DOBLE Y PERDIMOS → Pasar a TRIPLE
                     if self.modo_actual == "DOBLE":
                         self.modo_actual = "TRIPLE"
                         if self.on_prediction:
                             self.on_prediction(f"🔄 PRO: DOBLE falló → TRIPLE")
                     
-                    # Si estábamos en TRIPLE y PERDIMOS → Seguir en TRIPLE
+                    # ⭐ SI ESTÁBAMOS EN TRIPLE Y PERDIMOS → VOLVER A BASE (CORREGIDO)
                     elif self.modo_actual == "TRIPLE":
-                        pass
+                        self.modo_actual = "BASE"
+                        self.patron_color = None
+                        self.session_history = []
+                        if self.on_prediction:
+                            self.on_prediction(f"🔄 PRO: TRIPLE falló → Volviendo a BASE")
                     
                     # Si estábamos en ALTERNANCIA y PERDIMOS → Volver a BASE
                     elif self.modo_actual == "ALTERNANCIA":
                         self.modo_actual = "BASE"
                         self.alternancia_activa = False
+                        self.session_history = []
                         if self.on_prediction:
                             self.on_prediction(f"🔄 PRO: ALTERNANCIA rota → Volviendo a BASE")
             
@@ -936,9 +940,10 @@ class ProPredictor:
                 # Se rompió la alternancia
                 self.modo_actual = "BASE"
                 self.alternancia_activa = False
+                self.session_history = []
                 if self.on_prediction:
                     self.on_prediction(f"🔄 PRO: ALTERNANCIA rota → Volviendo a BASE")
-                prediccion = self.session_history[-1]
+                prediccion = self.session_history[-1] if self.session_history else None
                 patron_detectado = "BASE"
         else:
             prediccion, patron_detectado, nuevo_modo = self._detectar_patron(self.session_history)
@@ -955,7 +960,10 @@ class ProPredictor:
         # 4. MOSTRAR PREDICCIÓN
         # ============================================
         if prediccion is None:
-            prediccion = self.session_history[-1]
+            if self.session_history:
+                prediccion = self.session_history[-1]
+            else:
+                return
             patron_detectado = "BASE"
         
         self.last_prediction = prediccion
@@ -963,10 +971,10 @@ class ProPredictor:
         
         if self.on_prediction:
             if patron_detectado == "TRIPLE":
-                color_patron = self.session_history[-1]
+                color_patron = self.session_history[-1] if self.session_history else 'red'
                 self.on_prediction(f"🎯 PRO (TRIPLE {self._color_emoji(color_patron)}{self._color_emoji(color_patron)}{self._color_emoji(color_patron)} → {emoji})")
             elif patron_detectado == "DOBLE":
-                color_patron = self.session_history[-1]
+                color_patron = self.session_history[-1] if self.session_history else 'red'
                 self.on_prediction(f"🎯 PRO (DOBLE {self._color_emoji(color_patron)}{self._color_emoji(color_patron)} → {emoji})")
             elif patron_detectado == "ALTERNANCIA":
                 self.on_prediction(f"🎯 PRO (ALTERNANCIA → {emoji})")
@@ -1149,7 +1157,7 @@ class PredictionBot:
         elif mode == "tendencial":
             modo_texto = "📊 TENDENCIAL (Ciclo fijo 2-3-2-3)"
         else:
-            modo_texto = "🏆 PRO (BASE + DOBLE/TRIPLE + ALTERNANCIA)"
+            modo_texto = "🏆 PRO (BASE + DOBLE/TRIPLE + ALTERNANCIA) - CORREGIDO"
         
         keyboard = [
             [InlineKeyboardButton("📡 MODO SEÑALES", callback_data='signals_mode')],
@@ -1202,7 +1210,7 @@ class PredictionBot:
         elif mode == "tendencial":
             desc = "• Espera el PRIMER COLOR que sale\n• Ciclo fijo: 2 del primer color, 3 del contrario, 2, 3, 2, 3...\n• NO cambia por WIN/LOSS, sigue el ciclo fijo\n• PERO muestra el resultado de cada apuesta (WIN/LOSS)"
         else:
-            desc = "• Siempre comienza en BASE (seguir color)\n• DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE\n• TRIPLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → sigue TRIPLE\n• ALTERNANCIA: se mantiene hasta que rompa, luego BASE\n• PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE"
+            desc = "• Siempre comienza en BASE (seguir color)\n• DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE\n• TRIPLE: apuesta CONTRARIO, SIEMPRE vuelve a BASE (WIN o LOSS)\n• ALTERNANCIA: se mantiene hasta que rompa, luego BASE\n• PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE"
         
         await query.edit_message_text(
             f"📡 MODO SEÑALES ACTIVADO - {mode.upper()}\n\n"
@@ -1235,7 +1243,7 @@ class PredictionBot:
         elif mode == "tendencial":
             desc = "• Espera el PRIMER COLOR que sale\n• Ciclo fijo: 2 del primer color, 3 del contrario, 2, 3, 2, 3...\n• NO cambia por WIN/LOSS, sigue el ciclo fijo\n• PERO muestra el resultado de cada apuesta (WIN/LOSS)"
         else:
-            desc = "• Siempre comienza en BASE (seguir color)\n• DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE\n• TRIPLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → sigue TRIPLE\n• ALTERNANCIA: se mantiene hasta que rompa, luego BASE\n• PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE"
+            desc = "• Siempre comienza en BASE (seguir color)\n• DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE\n• TRIPLE: apuesta CONTRARIO, SIEMPRE vuelve a BASE (WIN o LOSS)\n• ALTERNANCIA: se mantiene hasta que rompa, luego BASE\n• PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE"
         
         await query.edit_message_text(
             f"🤖 MODO AUTOMATICO - {mode.upper()}\n\n"
@@ -1362,7 +1370,6 @@ class PredictionBot:
             return
         
         for account in session.get('accounts', []):
-            # REACTIVAR DESDE PAUSA SI HAY WIN
             if account.paused and won:
                 account.reactivate_from_pause()
                 self._sync_send_message(user_id, f"✅ WIN DETECTADO - ¡CUENTA REACTIVADA!")
@@ -1477,7 +1484,7 @@ class PredictionBot:
         elif bot_mode == "tendencial":
             modo_texto = "TENDENCIAL (Ciclo 2-3-2-3)"
         else:
-            modo_texto = "PRO (BASE + DOBLE/TRIPLE + ALTERNANCIA)"
+            modo_texto = "PRO (BASE + DOBLE/TRIPLE + ALTERNANCIA) CORREGIDO"
         
         keyboard = [
             [InlineKeyboardButton(f"💰 Inicial: ${config['initial_bet']}", callback_data='cfg_initial')],
@@ -1732,7 +1739,7 @@ class PredictionBot:
         elif bot_mode == "tendencial":
             reglas = "• Espera el PRIMER COLOR que sale\n• Ciclo fijo: 2 del primer color, 3 del contrario, 2, 3, 2, 3...\n• NO cambia por WIN/LOSS, sigue el ciclo fijo\n• PERO muestra el resultado de cada apuesta (WIN/LOSS)"
         else:
-            reglas = "• Siempre comienza en BASE (seguir color)\n• DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE\n• TRIPLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → sigue TRIPLE\n• ALTERNANCIA: se mantiene hasta que rompa, luego BASE\n• PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE"
+            reglas = "• Siempre comienza en BASE (seguir color)\n• DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE\n• TRIPLE: apuesta CONTRARIO, SIEMPRE vuelve a BASE (WIN o LOSS)\n• ALTERNANCIA: se mantiene hasta que rompa, luego BASE\n• PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE"
         
         await update.callback_query.edit_message_text(
             f"✅ AUTO-BET ACTIVADO - {bot_mode.upper()}\n\n"
@@ -1914,7 +1921,7 @@ class PredictionBot:
             elif mode == "tendencial":
                 desc = "TENDENCIAL: Ciclo fijo 2-3-2-3 basado en el primer color"
             else:
-                desc = "PRO: BASE + DOBLE/TRIPLE (CONTRARIO) + ALTERNANCIA con prioridad"
+                desc = "PRO: BASE + DOBLE/TRIPLE (CONTRARIO) + ALTERNANCIA - CORREGIDO (TRIPLE siempre vuelve a BASE)"
             
             await query.edit_message_text(
                 f"📜 INFORMACIÓN DE LICENCIA\n\n"
@@ -1954,7 +1961,7 @@ class PredictionBot:
                 "• peakbreak - Peak Break 60 días (35 USDT) - WIN + N LOSS\n"
                 "• cazador - Cazador 90 días (50 USDT) - Patrones DOBLE y TRIPLE con BLOQUEO\n"
                 "• tendencial - Tendencial 75 días (45 USDT) - Ciclo fijo 2-3-2-3\n"
-                "• pro - PRO 90 días (60 USDT) - BASE + DOBLE/TRIPLE + ALTERNANCIA\n\n"
+                "• pro - PRO 90 días (60 USDT) - BASE + DOBLE/TRIPLE + ALTERNANCIA (CORREGIDO)\n\n"
                 "Ejemplo: /validar 123456789 hack"
             )
             return
@@ -1980,7 +1987,7 @@ class PredictionBot:
                 elif plan == "tendencial":
                     mode_desc = "TENDENCIAL (Ciclo fijo 2-3-2-3 basado en el primer color)"
                 else:
-                    mode_desc = "PRO (BASE + DOBLE/TRIPLE CONTRARIO + ALTERNANCIA con prioridad)"
+                    mode_desc = "PRO (BASE + DOBLE/TRIPLE CONTRARIO + ALTERNANCIA) - CORREGIDO: TRIPLE siempre vuelve a BASE"
                 
                 await self._send_message(
                     target_user_id,
@@ -2067,14 +2074,14 @@ class PredictionBot:
         self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_any_photo))
         
         print("=" * 70)
-        print("🎰 PREDICTOR BOT V6 - CON MODO PRO")
+        print("🎰 PREDICTOR BOT V6 - CON MODO PRO CORREGIDO")
         print("=" * 70)
         print("💰 PLANES DE LICENCIA:")
         print("  • 🔧 Hack 30d: 15 USDT (1 cuenta) - Estrategia #3 Anti-sistema")
         print("  • ⛰️ Peak Break 60d: 35 USDT (1 cuenta) - WIN + N LOSS (N=1/2 cíclico)")
         print("  • 🎯 Cazador 90d: 50 USDT (1 cuenta) - Patrones DOBLE y TRIPLE con BLOQUEO")
         print("  • 📊 Tendencial 75d: 45 USDT (1 cuenta) - Ciclo fijo 2-3-2-3")
-        print("  • 🏆 PRO 90d: 60 USDT (1 cuenta) - BASE + DOBLE/TRIPLE + ALTERNANCIA")
+        print("  • 🏆 PRO 90d: 60 USDT (1 cuenta) - BASE + DOBLE/TRIPLE + ALTERNANCIA (CORREGIDO)")
         print("=" * 70)
         print("🔄 SISTEMA DE PAUSA Y REINICIO:")
         print("  • Cuando alcanza Stop Loss → PAUSA (espera WIN)")
@@ -2085,10 +2092,10 @@ class PredictionBot:
         print("  • Máximo de pausas configurable (1-5)")
         print("  • Al llegar al límite → DETENCIÓN PERMANENTE")
         print("=" * 70)
-        print("🏆 MODO PRO:")
+        print("🏆 MODO PRO (CORREGIDO):")
         print("  • Siempre comienza en BASE (seguir color)")
         print("  • DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE")
-        print("  • TRIPLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → sigue TRIPLE")
+        print("  • TRIPLE: apuesta CONTRARIO, SIEMPRE vuelve a BASE (WIN o LOSS)")
         print("  • ALTERNANCIA: se mantiene hasta que rompa, luego BASE")
         print("  • PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE")
         print("=" * 70)
@@ -2098,6 +2105,6 @@ class PredictionBot:
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    print("🚀 INICIANDO PREDICTOR BOT V6...")
+    print("🚀 INICIANDO PREDICTOR BOT V6 (PRO CORREGIDO)...")
     bot = PredictionBot(BOT_TOKEN)
     bot.run()
