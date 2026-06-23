@@ -1,6 +1,8 @@
-# bot.py - PREDICTOR BOT V6 (HACK + PEAK BREAK V2 + CAZADOR + TENDENCIAL + PRO)
+# bot.py - PREDICTOR BOT V7 (DEFINITIVO)
+# HACK + PEAK BREAK V2 + CAZADOR + TENDENCIAL + PRO
 # CON SISTEMA DE PAUSA Y REINICIO CON RECUPERACIÓN DE SALDO
-# MODO PRO CORREGIDO: TRIPLE siempre vuelve a BASE (WIN o LOSS)
+# CON SISTEMA DE APUESTA PENDIENTE PARA EVITAR ERRORES INTERMITENTES
+# COPYRIGHT © 2025 - PRO PREDICTOR
 
 import json
 import os
@@ -283,6 +285,10 @@ class HackPredictor:
         self.active = True
         self.on_prediction = None
         self.on_result = None
+        
+        # SISTEMA DE APUESTA PENDIENTE
+        self.apuesta_pendiente = False
+        self.prediccion_pendiente = None
     
     def _normalizar_color(self, color: str) -> str:
         if color is None:
@@ -300,8 +306,11 @@ class HackPredictor:
         
         color = self._normalizar_color(color)
         
-        if self.last_prediction is not None:
-            is_win = (self.last_prediction == color)
+        # ============================================
+        # 1. VERIFICAR APUESTA PENDIENTE
+        # ============================================
+        if self.apuesta_pendiente and self.prediccion_pendiente is not None:
+            is_win = (self.prediccion_pendiente == color)
             
             if self.on_result:
                 if is_win:
@@ -320,22 +329,37 @@ class HackPredictor:
                     self.consecutive_losses += 1
                     self.consecutive_wins = 0
             
-            self.last_prediction = None
+            self.apuesta_pendiente = False
+            self.prediccion_pendiente = None
+            return
         
+        # ============================================
+        # 2. AGREGAR COLOR AL HISTORIAL
+        # ============================================
         self.session_history.append(color)
         if len(self.session_history) > 20:
             self.session_history = self.session_history[-20:]
         
+        # ============================================
+        # 3. MANEJO DEL MODO ANTI
+        # ============================================
         if self.anti_mode:
             if self.anti_rounds_left > 0:
-                self.last_prediction = self.anti_color
+                prediccion = self.anti_color
                 self.anti_rounds_left -= 1
+                
+                self.prediccion_pendiente = prediccion
+                self.apuesta_pendiente = True
+                self.last_prediction = prediccion
                 
                 if self.on_prediction:
                     rounds_done = 2 - self.anti_rounds_left
                     self.on_prediction(f"🛡️ MODO ANTI ({rounds_done}/2): {'🔴' if self.anti_color == 'red' else '🔵'}")
                 return
         
+        # ============================================
+        # 4. DETECTAR PÉRDIDAS PARA ACTIVAR MODO ANTI
+        # ============================================
         if not self.anti_mode:
             if self.consecutive_losses == 1:
                 self.first_lost_color = color
@@ -350,16 +374,26 @@ class HackPredictor:
                 if self.on_prediction:
                     self.on_prediction(f"⚠️ 2 PÉRDIDAS CONSECUTIVAS - Activando MODO ANTI")
                 
-                self.last_prediction = self.anti_color
+                prediccion = self.anti_color
+                self.prediccion_pendiente = prediccion
+                self.apuesta_pendiente = True
+                self.last_prediction = prediccion
                 self.anti_rounds_left -= 1
                 
                 if self.on_prediction:
                     self.on_prediction(f"🛡️ MODO ANTI (1/2): {'🔴' if self.anti_color == 'red' else '🔵'}")
                 return
         
+        # ============================================
+        # 5. ESTRATEGIA NORMAL: SEGUIR EL ÚLTIMO COLOR
+        # ============================================
         if self.session_history:
             last_color = self.session_history[-1]
-            self.last_prediction = last_color
+            prediccion = last_color
+            
+            self.prediccion_pendiente = prediccion
+            self.apuesta_pendiente = True
+            self.last_prediction = prediccion
             
             if self.on_prediction:
                 self.on_prediction(f"🎯 SIGUIENTE: {'🔴' if last_color == 'red' else '🔵'}")
@@ -377,6 +411,8 @@ class HackPredictor:
         self.anti_color = None
         self.first_lost_color = None
         self.second_lost_color = None
+        self.apuesta_pendiente = False
+        self.prediccion_pendiente = None
 
 # ==================== PREDICTOR PEAK BREAK V2 ====================
 class PeakBreakPredictorV2:
@@ -396,6 +432,9 @@ class PeakBreakPredictorV2:
         self.required_losses = 1
         self.win_detected = False
         self.losses_count = 0
+        
+        self.apuesta_pendiente = False
+        self.prediccion_pendiente = None
     
     def _normalizar_color(self, color: str) -> str:
         return self.hack_predictor._normalizar_color(color)
@@ -406,8 +445,11 @@ class PeakBreakPredictorV2:
         
         color = self._normalizar_color(color)
         
-        if self.pending_bet and self.last_bet_prediction is not None:
-            is_win = (self.last_bet_prediction == color)
+        # ============================================
+        # 1. VERIFICAR APUESTA PENDIENTE
+        # ============================================
+        if self.apuesta_pendiente and self.prediccion_pendiente is not None:
+            is_win = (self.prediccion_pendiente == color)
             
             if self.on_result:
                 if is_win:
@@ -427,13 +469,20 @@ class PeakBreakPredictorV2:
                     self.losses_count = 0
                     self.required_losses = 1
             
-            self.pending_bet = False
-            self.last_bet_prediction = None
+            self.apuesta_pendiente = False
+            self.prediccion_pendiente = None
+            return
         
+        # ============================================
+        # 2. ACTUALIZAR PREDICTOR HACK
+        # ============================================
         previous_prediction = self.hack_predictor.get_last_prediction()
         self.hack_predictor.process_color(color)
         
-        if not self.active_mode and self.waiting_for_win and not self.pending_bet:
+        # ============================================
+        # 3. LÓGICA DE ACTIVACIÓN: WIN + N LOSS
+        # ============================================
+        if not self.active_mode and self.waiting_for_win and not self.apuesta_pendiente:
             if previous_prediction is not None and previous_prediction == color:
                 self.win_detected = True
                 self.losses_count = 0
@@ -463,15 +512,20 @@ class PeakBreakPredictorV2:
             elif not self.win_detected:
                 self.losses_count = 0
         
-        if self.active_mode and not self.pending_bet:
+        # ============================================
+        # 4. GENERAR APUESTA SI ESTAMOS ACTIVOS
+        # ============================================
+        if self.active_mode and not self.apuesta_pendiente:
             if self.hack_predictor.last_prediction:
                 pred = self.hack_predictor.last_prediction
             else:
                 pred = self.hack_predictor.get_last_prediction()
             
             if pred:
+                self.prediccion_pendiente = pred
+                self.apuesta_pendiente = True
                 self.last_bet_prediction = pred
-                self.pending_bet = True
+                
                 pred_emoji = "🔴" if pred == 'red' else "🔵"
                 if self.on_prediction:
                     self.on_prediction(f"⛰️ PEAK BREAK: {pred_emoji}")
@@ -486,6 +540,8 @@ class PeakBreakPredictorV2:
         self.required_losses = 1
         self.win_detected = False
         self.losses_count = 0
+        self.apuesta_pendiente = False
+        self.prediccion_pendiente = None
 
 # ==================== PREDICTOR CAZADOR ====================
 class CazadorPredictor:
@@ -504,6 +560,9 @@ class CazadorPredictor:
         self.esperando_resultado = False
         self.primer_cambio_detectado = False
         self.color_bloqueado = None
+        
+        self.prediccion_pendiente = None
+        self.resultado_pendiente = False
     
     def _normalizar_color(self, color: str) -> str:
         if color is None:
@@ -548,8 +607,11 @@ class CazadorPredictor:
         
         color = self._normalizar_color(color)
         
-        if self.esperando_resultado and self.apuesta_color is not None:
-            is_win = (self.apuesta_color == color)
+        # ============================================
+        # 1. VERIFICAR APUESTA PENDIENTE
+        # ============================================
+        if self.resultado_pendiente and self.prediccion_pendiente is not None:
+            is_win = (self.prediccion_pendiente == color)
             
             if self.on_result:
                 if is_win:
@@ -563,8 +625,9 @@ class CazadorPredictor:
                 self.estado = "TRIPLE"
                 self.patron_tipo = "triple"
                 self.apuesta_pendiente = False
-                self.esperando_resultado = False
+                self.resultado_pendiente = False
                 self.apuesta_color = None
+                self.prediccion_pendiente = None
                 self._generar_apuesta()
                 return
             
@@ -584,14 +647,21 @@ class CazadorPredictor:
                 self.patron_color = None
                 self.patron_tipo = None
                 self.apuesta_pendiente = False
-                self.esperando_resultado = False
+                self.resultado_pendiente = False
                 self.apuesta_color = None
+                self.prediccion_pendiente = None
                 return
         
+        # ============================================
+        # 2. AGREGAR COLOR AL HISTORIAL
+        # ============================================
         self.ultimos_colores.append(color)
         if len(self.ultimos_colores) > 20:
             self.ultimos_colores = self.ultimos_colores[-20:]
         
+        # ============================================
+        # 3. ESPERAR EL PRIMER CAMBIO DE COLOR
+        # ============================================
         if not self.primer_cambio_detectado:
             if len(self.ultimos_colores) >= 2:
                 if self.ultimos_colores[-1] != self.ultimos_colores[-2]:
@@ -601,7 +671,10 @@ class CazadorPredictor:
             if not self.primer_cambio_detectado:
                 return
         
-        if not self.apuesta_pendiente and not self.esperando_resultado and self.estado == "BUSCANDO":
+        # ============================================
+        # 4. BUSCAR PATRONES
+        # ============================================
+        if not self.apuesta_pendiente and not self.resultado_pendiente and self.estado == "BUSCANDO":
             patron_color, patron_tipo = self._buscar_patron(self.ultimos_colores, self.color_bloqueado)
             
             if patron_color is not None:
@@ -625,7 +698,8 @@ class CazadorPredictor:
         
         self.apuesta_color = self._color_contrario(self.patron_color)
         self.apuesta_pendiente = True
-        self.esperando_resultado = True
+        self.resultado_pendiente = True
+        self.prediccion_pendiente = self.apuesta_color
         
         emoji = self._color_emoji(self.apuesta_color)
         if self.patron_tipo == "doble":
@@ -640,9 +714,10 @@ class CazadorPredictor:
         self.patron_tipo = None
         self.apuesta_pendiente = False
         self.apuesta_color = None
-        self.esperando_resultado = False
+        self.resultado_pendiente = False
         self.primer_cambio_detectado = False
         self.color_bloqueado = None
+        self.prediccion_pendiente = None
 
 # ==================== PREDICTOR TENDENCIAL ====================
 class TendencialPredictor:
@@ -660,6 +735,8 @@ class TendencialPredictor:
         self.apuesta_pendiente = False
         self.esperando_resultado = False
         self.ultima_prediccion = None
+        
+        self.prediccion_pendiente = None
     
     def _normalizar_color(self, color: str) -> str:
         if color is None:
@@ -704,8 +781,11 @@ class TendencialPredictor:
         
         color = self._normalizar_color(color)
         
-        if self.esperando_resultado and self.ultima_prediccion is not None:
-            is_win = (self.ultima_prediccion == color)
+        # ============================================
+        # 1. VERIFICAR APUESTA PENDIENTE
+        # ============================================
+        if self.esperando_resultado and self.prediccion_pendiente is not None:
+            is_win = (self.prediccion_pendiente == color)
             
             if self.on_result:
                 if is_win:
@@ -714,9 +794,12 @@ class TendencialPredictor:
                     self.on_result(f"❌ LOSS (TENDENCIAL)", False)
             
             self.esperando_resultado = False
-            self.ultima_prediccion = None
             self.apuesta_pendiente = False
+            self.prediccion_pendiente = None
         
+        # ============================================
+        # 2. ESPERAR EL PRIMER COLOR
+        # ============================================
         if self.estado == "ESPERANDO":
             self.primer_color = color
             self.estado = "ACTIVO"
@@ -730,12 +813,15 @@ class TendencialPredictor:
             self.color_apuesta = self.primer_color
             self.apuesta_pendiente = True
             self.esperando_resultado = True
-            self.ultima_prediccion = self.color_apuesta
+            self.prediccion_pendiente = self.color_apuesta
             
             if self.on_prediction:
                 self.on_prediction(f"🎯 TENDENCIAL (1/2): {self._color_emoji(self.color_apuesta)}")
             return
         
+        # ============================================
+        # 3. CALCULAR SIGUIENTE APUESTA
+        # ============================================
         if self.estado == "ACTIVO" and not self.apuesta_pendiente:
             siguiente = self._calcular_siguiente_apuesta()
             
@@ -743,7 +829,7 @@ class TendencialPredictor:
                 self.color_apuesta = siguiente
                 self.apuesta_pendiente = True
                 self.esperando_resultado = True
-                self.ultima_prediccion = self.color_apuesta
+                self.prediccion_pendiente = self.color_apuesta
                 
                 if self.ciclo_actual == "primario":
                     emoji = self._color_emoji(self.color_apuesta)
@@ -760,17 +846,12 @@ class TendencialPredictor:
         self.color_apuesta = None
         self.apuesta_pendiente = False
         self.esperando_resultado = False
-        self.ultima_prediccion = None
+        self.prediccion_pendiente = None
 
-# ==================== PREDICTOR PRO CORREGIDO ====================
+# ==================== PREDICTOR PRO ====================
 class ProPredictor:
     """
-    ESTRATEGIA PRO CORREGIDA:
-    - Siempre comienza en BASE (seguir color)
-    - DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE
-    - TRIPLE: apuesta CONTRARIO, SIEMPRE vuelve a BASE (tanto WIN como LOSS)
-    - ALTERNANCIA: se mantiene hasta que rompa, luego BASE
-    - PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE
+    ESTRATEGIA PRO CORREGIDA CON SISTEMA DE APUESTA PENDIENTE
     """
     def __init__(self, user_id: int):
         self.user_id = user_id
@@ -784,8 +865,12 @@ class ProPredictor:
         self.consecutive_losses = 0
         self.consecutive_wins = 0
         
+        # SISTEMA DE APUESTA PENDIENTE
+        self.apuesta_pendiente = False
+        self.prediccion_pendiente = None
+        
         # Estado actual del modo
-        self.modo_actual = "BASE"  # BASE | DOBLE | TRIPLE | ALTERNANCIA
+        self.modo_actual = "BASE"
         self.patron_color = None
         self.alternancia_activa = False
     
@@ -864,10 +949,10 @@ class ProPredictor:
         color = self._normalizar_color(color)
         
         # ============================================
-        # 1. VERIFICAR RESULTADO DE APUESTA ANTERIOR
+        # 1. VERIFICAR APUESTA PENDIENTE
         # ============================================
-        if self.last_prediction is not None:
-            is_win = (self.last_prediction == color)
+        if self.apuesta_pendiente and self.prediccion_pendiente is not None:
+            is_win = (self.prediccion_pendiente == color)
             
             if self.on_result:
                 if is_win:
@@ -875,16 +960,13 @@ class ProPredictor:
                     self.consecutive_wins += 1
                     self.consecutive_losses = 0
                     
-                    # ⭐ SI ESTÁBAMOS EN DOBLE O TRIPLE Y GANAMOS → VOLVER A BASE
                     if self.modo_actual in ["DOBLE", "TRIPLE"]:
                         self.modo_actual = "BASE"
                         self.patron_color = None
-                        # Limpiar historial para no repetir patrón
                         self.session_history = []
                         if self.on_prediction:
                             self.on_prediction(f"🔄 PRO: Volviendo a BASE")
                     
-                    # Si estábamos en ALTERNANCIA y GANAMOS → Seguir en ALTERNANCIA
                     elif self.modo_actual == "ALTERNANCIA":
                         self.alternancia_activa = True
                     
@@ -893,13 +975,11 @@ class ProPredictor:
                     self.consecutive_losses += 1
                     self.consecutive_wins = 0
                     
-                    # ⭐ SI ESTÁBAMOS EN DOBLE Y PERDIMOS → Pasar a TRIPLE
                     if self.modo_actual == "DOBLE":
                         self.modo_actual = "TRIPLE"
                         if self.on_prediction:
                             self.on_prediction(f"🔄 PRO: DOBLE falló → TRIPLE")
                     
-                    # ⭐ SI ESTÁBAMOS EN TRIPLE Y PERDIMOS → VOLVER A BASE (CORREGIDO)
                     elif self.modo_actual == "TRIPLE":
                         self.modo_actual = "BASE"
                         self.patron_color = None
@@ -907,7 +987,6 @@ class ProPredictor:
                         if self.on_prediction:
                             self.on_prediction(f"🔄 PRO: TRIPLE falló → Volviendo a BASE")
                     
-                    # Si estábamos en ALTERNANCIA y PERDIMOS → Volver a BASE
                     elif self.modo_actual == "ALTERNANCIA":
                         self.modo_actual = "BASE"
                         self.alternancia_activa = False
@@ -915,7 +994,9 @@ class ProPredictor:
                         if self.on_prediction:
                             self.on_prediction(f"🔄 PRO: ALTERNANCIA rota → Volviendo a BASE")
             
-            self.last_prediction = None
+            self.apuesta_pendiente = False
+            self.prediccion_pendiente = None
+            return
         
         # ============================================
         # 2. AGREGAR COLOR AL HISTORIAL
@@ -930,14 +1011,12 @@ class ProPredictor:
         if len(self.session_history) < 2:
             return
         
-        # Si estamos en modo ALTERNANCIA y sigue activa
         if self.modo_actual == "ALTERNANCIA" and self.alternancia_activa:
             alternancia = self._check_alternancia(self.session_history)
             if alternancia is not None:
                 prediccion = alternancia
                 patron_detectado = "ALTERNANCIA"
             else:
-                # Se rompió la alternancia
                 self.modo_actual = "BASE"
                 self.alternancia_activa = False
                 self.session_history = []
@@ -957,7 +1036,7 @@ class ProPredictor:
                 self.modo_actual = "BASE"
         
         # ============================================
-        # 4. MOSTRAR PREDICCIÓN
+        # 4. GUARDAR PREDICCIÓN COMO PENDIENTE
         # ============================================
         if prediccion is None:
             if self.session_history:
@@ -966,7 +1045,10 @@ class ProPredictor:
                 return
             patron_detectado = "BASE"
         
+        self.prediccion_pendiente = prediccion
+        self.apuesta_pendiente = True
         self.last_prediction = prediccion
+        
         emoji = self._color_emoji(prediccion)
         
         if self.on_prediction:
@@ -989,6 +1071,8 @@ class ProPredictor:
         self.modo_actual = "BASE"
         self.patron_color = None
         self.alternancia_activa = False
+        self.apuesta_pendiente = False
+        self.prediccion_pendiente = None
 
 # ==================== POLLING GLOBAL ====================
 class GlobalPolling:
@@ -1157,7 +1241,7 @@ class PredictionBot:
         elif mode == "tendencial":
             modo_texto = "📊 TENDENCIAL (Ciclo fijo 2-3-2-3)"
         else:
-            modo_texto = "🏆 PRO (BASE + DOBLE/TRIPLE + ALTERNANCIA) - CORREGIDO"
+            modo_texto = "🏆 PRO (BASE + DOBLE/TRIPLE + ALTERNANCIA) - CON APUESTA PENDIENTE"
         
         keyboard = [
             [InlineKeyboardButton("📡 MODO SEÑALES", callback_data='signals_mode')],
@@ -1167,7 +1251,7 @@ class PredictionBot:
         ]
         
         await update.message.reply_text(
-            f"🎰 PREDICTOR BOT V6\n\n"
+            f"🎰 PREDICTOR BOT V7\n\n"
             f"✅ Licencia: {plan_name}\n"
             f"🎲 Modo: {modo_texto}\n"
             f"👥 Máx cuentas: {max_accounts}\n\n"
@@ -1210,7 +1294,7 @@ class PredictionBot:
         elif mode == "tendencial":
             desc = "• Espera el PRIMER COLOR que sale\n• Ciclo fijo: 2 del primer color, 3 del contrario, 2, 3, 2, 3...\n• NO cambia por WIN/LOSS, sigue el ciclo fijo\n• PERO muestra el resultado de cada apuesta (WIN/LOSS)"
         else:
-            desc = "• Siempre comienza en BASE (seguir color)\n• DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE\n• TRIPLE: apuesta CONTRARIO, SIEMPRE vuelve a BASE (WIN o LOSS)\n• ALTERNANCIA: se mantiene hasta que rompa, luego BASE\n• PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE"
+            desc = "• Siempre comienza en BASE (seguir color)\n• DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE\n• TRIPLE: apuesta CONTRARIO, SIEMPRE vuelve a BASE (WIN o LOSS)\n• ALTERNANCIA: se mantiene hasta que rompa, luego BASE\n• PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE\n• CON SISTEMA DE APUESTA PENDIENTE para evitar errores"
         
         await query.edit_message_text(
             f"📡 MODO SEÑALES ACTIVADO - {mode.upper()}\n\n"
@@ -1243,7 +1327,7 @@ class PredictionBot:
         elif mode == "tendencial":
             desc = "• Espera el PRIMER COLOR que sale\n• Ciclo fijo: 2 del primer color, 3 del contrario, 2, 3, 2, 3...\n• NO cambia por WIN/LOSS, sigue el ciclo fijo\n• PERO muestra el resultado de cada apuesta (WIN/LOSS)"
         else:
-            desc = "• Siempre comienza en BASE (seguir color)\n• DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE\n• TRIPLE: apuesta CONTRARIO, SIEMPRE vuelve a BASE (WIN o LOSS)\n• ALTERNANCIA: se mantiene hasta que rompa, luego BASE\n• PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE"
+            desc = "• Siempre comienza en BASE (seguir color)\n• DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE\n• TRIPLE: apuesta CONTRARIO, SIEMPRE vuelve a BASE (WIN o LOSS)\n• ALTERNANCIA: se mantiene hasta que rompa, luego BASE\n• PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE\n• CON SISTEMA DE APUESTA PENDIENTE para evitar errores"
         
         await query.edit_message_text(
             f"🤖 MODO AUTOMATICO - {mode.upper()}\n\n"
@@ -1346,6 +1430,7 @@ class PredictionBot:
             return
         
         for account in session.get('accounts', []):
+            # ⭐ CRÍTICO: Si está en pausa, NO apostar
             if account.paused:
                 continue
             
@@ -1370,6 +1455,7 @@ class PredictionBot:
             return
         
         for account in session.get('accounts', []):
+            # ⭐ CRÍTICO: Si está en pausa y hay WIN → REACTIVAR
             if account.paused and won:
                 account.reactivate_from_pause()
                 self._sync_send_message(user_id, f"✅ WIN DETECTADO - ¡CUENTA REACTIVADA!")
@@ -1484,7 +1570,7 @@ class PredictionBot:
         elif bot_mode == "tendencial":
             modo_texto = "TENDENCIAL (Ciclo 2-3-2-3)"
         else:
-            modo_texto = "PRO (BASE + DOBLE/TRIPLE + ALTERNANCIA) CORREGIDO"
+            modo_texto = "PRO (BASE + DOBLE/TRIPLE + ALTERNANCIA)"
         
         keyboard = [
             [InlineKeyboardButton(f"💰 Inicial: ${config['initial_bet']}", callback_data='cfg_initial')],
@@ -1739,7 +1825,7 @@ class PredictionBot:
         elif bot_mode == "tendencial":
             reglas = "• Espera el PRIMER COLOR que sale\n• Ciclo fijo: 2 del primer color, 3 del contrario, 2, 3, 2, 3...\n• NO cambia por WIN/LOSS, sigue el ciclo fijo\n• PERO muestra el resultado de cada apuesta (WIN/LOSS)"
         else:
-            reglas = "• Siempre comienza en BASE (seguir color)\n• DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE\n• TRIPLE: apuesta CONTRARIO, SIEMPRE vuelve a BASE (WIN o LOSS)\n• ALTERNANCIA: se mantiene hasta que rompa, luego BASE\n• PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE"
+            reglas = "• Siempre comienza en BASE (seguir color)\n• DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE\n• TRIPLE: apuesta CONTRARIO, SIEMPRE vuelve a BASE (WIN o LOSS)\n• ALTERNANCIA: se mantiene hasta que rompa, luego BASE\n• PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE\n• CON SISTEMA DE APUESTA PENDIENTE"
         
         await update.callback_query.edit_message_text(
             f"✅ AUTO-BET ACTIVADO - {bot_mode.upper()}\n\n"
@@ -1921,7 +2007,7 @@ class PredictionBot:
             elif mode == "tendencial":
                 desc = "TENDENCIAL: Ciclo fijo 2-3-2-3 basado en el primer color"
             else:
-                desc = "PRO: BASE + DOBLE/TRIPLE (CONTRARIO) + ALTERNANCIA - CORREGIDO (TRIPLE siempre vuelve a BASE)"
+                desc = "PRO: BASE + DOBLE/TRIPLE (CONTRARIO) + ALTERNANCIA - CON APUESTA PENDIENTE"
             
             await query.edit_message_text(
                 f"📜 INFORMACIÓN DE LICENCIA\n\n"
@@ -1961,7 +2047,7 @@ class PredictionBot:
                 "• peakbreak - Peak Break 60 días (35 USDT) - WIN + N LOSS\n"
                 "• cazador - Cazador 90 días (50 USDT) - Patrones DOBLE y TRIPLE con BLOQUEO\n"
                 "• tendencial - Tendencial 75 días (45 USDT) - Ciclo fijo 2-3-2-3\n"
-                "• pro - PRO 90 días (60 USDT) - BASE + DOBLE/TRIPLE + ALTERNANCIA (CORREGIDO)\n\n"
+                "• pro - PRO 90 días (60 USDT) - BASE + DOBLE/TRIPLE + ALTERNANCIA (CON APUESTA PENDIENTE)\n\n"
                 "Ejemplo: /validar 123456789 hack"
             )
             return
@@ -1987,7 +2073,7 @@ class PredictionBot:
                 elif plan == "tendencial":
                     mode_desc = "TENDENCIAL (Ciclo fijo 2-3-2-3 basado en el primer color)"
                 else:
-                    mode_desc = "PRO (BASE + DOBLE/TRIPLE CONTRARIO + ALTERNANCIA) - CORREGIDO: TRIPLE siempre vuelve a BASE"
+                    mode_desc = "PRO (BASE + DOBLE/TRIPLE CONTRARIO + ALTERNANCIA) - CON APUESTA PENDIENTE"
                 
                 await self._send_message(
                     target_user_id,
@@ -2074,14 +2160,14 @@ class PredictionBot:
         self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_any_photo))
         
         print("=" * 70)
-        print("🎰 PREDICTOR BOT V6 - CON MODO PRO CORREGIDO")
+        print("🎰 PREDICTOR BOT V7 - DEFINITIVO")
         print("=" * 70)
         print("💰 PLANES DE LICENCIA:")
         print("  • 🔧 Hack 30d: 15 USDT (1 cuenta) - Estrategia #3 Anti-sistema")
         print("  • ⛰️ Peak Break 60d: 35 USDT (1 cuenta) - WIN + N LOSS (N=1/2 cíclico)")
         print("  • 🎯 Cazador 90d: 50 USDT (1 cuenta) - Patrones DOBLE y TRIPLE con BLOQUEO")
         print("  • 📊 Tendencial 75d: 45 USDT (1 cuenta) - Ciclo fijo 2-3-2-3")
-        print("  • 🏆 PRO 90d: 60 USDT (1 cuenta) - BASE + DOBLE/TRIPLE + ALTERNANCIA (CORREGIDO)")
+        print("  • 🏆 PRO 90d: 60 USDT (1 cuenta) - BASE + DOBLE/TRIPLE + ALTERNANCIA")
         print("=" * 70)
         print("🔄 SISTEMA DE PAUSA Y REINICIO:")
         print("  • Cuando alcanza Stop Loss → PAUSA (espera WIN)")
@@ -2092,12 +2178,15 @@ class PredictionBot:
         print("  • Máximo de pausas configurable (1-5)")
         print("  • Al llegar al límite → DETENCIÓN PERMANENTE")
         print("=" * 70)
-        print("🏆 MODO PRO (CORREGIDO):")
+        print("🏆 MODO PRO:")
         print("  • Siempre comienza en BASE (seguir color)")
         print("  • DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE")
         print("  • TRIPLE: apuesta CONTRARIO, SIEMPRE vuelve a BASE (WIN o LOSS)")
         print("  • ALTERNANCIA: se mantiene hasta que rompa, luego BASE")
         print("  • PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE")
+        print("=" * 70)
+        print("✅ SISTEMA DE APUESTA PENDIENTE IMPLEMENTADO EN TODOS LOS MODOS")
+        print("   → Elimina errores intermitentes de WIN/LOSS")
         print("=" * 70)
         print("✅ BOT LISTO")
         print("=" * 70)
@@ -2105,6 +2194,6 @@ class PredictionBot:
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    print("🚀 INICIANDO PREDICTOR BOT V6 (PRO CORREGIDO)...")
+    print("🚀 INICIANDO PREDICTOR BOT V7 (DEFINITIVO)...")
     bot = PredictionBot(BOT_TOKEN)
     bot.run()
