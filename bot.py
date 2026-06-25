@@ -1,8 +1,8 @@
-# bot.py - PREDICTOR BOT V7 (DEFINITIVO)
+# bot.py - PREDICTOR BOT V7 (DEFINITIVO - PRO CORREGIDO)
 # HACK + PEAK BREAK V2 + CAZADOR + TENDENCIAL + PRO
 # CON SISTEMA DE PAUSA Y REINICIO CON RECUPERACIÓN DE SALDO
 # CON SISTEMA DE APUESTA PENDIENTE PARA EVITAR ERRORES INTERMITENTES
-# MODO PRO CORREGIDO: FUNCIONA IGUAL QUE HACK (APUESTA EN SIGUIENTE RONDA)
+# MODO PRO CORREGIDO: USA EL MISMO MÉTODO DE OBTENCIÓN DE COLOR QUE HACK
 
 import json
 import os
@@ -831,12 +831,15 @@ class TendencialPredictor:
         self.esperando_resultado = False
         self.prediccion_pendiente = None
 
-# ==================== PREDICTOR PRO (CORREGIDO) ====================
+# ==================== PREDICTOR PRO (CORREGIDO - USA MISMA OBTENCIÓN QUE HACK) ====================
 class ProPredictor:
     """
-    ESTRATEGIA PRO CORREGIDA - FUNCIONA IGUAL QUE HACK
-    - La predicción se genera y se apuesta en la SIGUIENTE ronda
-    - No espera turnos extra
+    ESTRATEGIA PRO CORREGIDA
+    - USA EL MISMO MÉTODO DE OBTENCIÓN DE COLOR QUE HACK
+    - Apuesta en cada ronda (igual que HACK)
+    - Detecta DOBLE, TRIPLE, ALTERNANCIA
+    - PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE
+    - TRIPLE SIEMPRE vuelve a BASE (WIN o LOSS)
     """
     def __init__(self, user_id: int):
         self.user_id = user_id
@@ -844,21 +847,22 @@ class ProPredictor:
         self.on_prediction = None
         self.on_result = None
         
-        # Estado PRO
+        # ⭐ MISMO HISTORIAL QUE HACK
         self.session_history = []
         self.last_prediction = None
         self.consecutive_losses = 0
         self.consecutive_wins = 0
         
-        # SISTEMA DE APUESTA PENDIENTE (IGUAL QUE HACK)
+        # ⭐ SISTEMA DE APUESTA PENDIENTE (IGUAL QUE HACK)
         self.apuesta_pendiente = False
         self.prediccion_pendiente = None
         
-        # Estado del modo
+        # Estado del modo PRO
         self.modo_actual = "BASE"  # BASE | DOBLE | TRIPLE | ALTERNANCIA
         self.patron_color = None
         self.alternancia_activa = False
     
+    # ⭐ MISMA FUNCIÓN DE NORMALIZACIÓN QUE HACK
     def _normalizar_color(self, color: str) -> str:
         if color is None:
             return 'red'
@@ -880,6 +884,7 @@ class ProPredictor:
     def _color_contrario(self, color: str) -> str:
         return 'blue' if color == 'red' else 'red'
     
+    # ⭐ MISMA DETECCIÓN DE PATRONES
     def _check_triple(self, colores) -> bool:
         if len(colores) < 3:
             return False
@@ -933,10 +938,12 @@ class ProPredictor:
         # PRIORIDAD 4: BASE
         return colores[-1], "BASE", "BASE"
     
+    # ⭐ MISMO PROCESAMIENTO QUE HACK
     def process_color(self, color: str):
         if not self.active:
             return
         
+        # ⭐ MISMA NORMALIZACIÓN QUE HACK
         color = self._normalizar_color(color)
         
         # ============================================
@@ -951,15 +958,16 @@ class ProPredictor:
                     self.consecutive_wins += 1
                     self.consecutive_losses = 0
                     
-                    # Si estaba en DOBLE o TRIPLE → Volver a BASE
+                    # Si estaba en DOBLE o TRIPLE y GANAMOS → Volver a BASE
                     if self.modo_actual in ["DOBLE", "TRIPLE"]:
                         self.modo_actual = "BASE"
                         self.patron_color = None
+                        # ⭐ LIMPIAR HISTORIAL PARA NO REPETIR PATRÓN
                         self.session_history = []
                         if self.on_prediction:
                             self.on_prediction(f"🔄 PRO: Volviendo a BASE")
                     
-                    # Si estaba en ALTERNANCIA → Seguir
+                    # Si estaba en ALTERNANCIA y GANAMOS → Seguir
                     elif self.modo_actual == "ALTERNANCIA":
                         self.alternancia_activa = True
                     
@@ -968,13 +976,13 @@ class ProPredictor:
                     self.consecutive_losses += 1
                     self.consecutive_wins = 0
                     
-                    # Si estaba en DOBLE → Pasar a TRIPLE
+                    # Si estaba en DOBLE y PERDIMOS → Pasar a TRIPLE
                     if self.modo_actual == "DOBLE":
                         self.modo_actual = "TRIPLE"
                         if self.on_prediction:
                             self.on_prediction(f"🔄 PRO: DOBLE falló → TRIPLE")
                     
-                    # Si estaba en TRIPLE → Volver a BASE
+                    # ⭐ SI ESTABA EN TRIPLE Y PERDIMOS → VOLVER A BASE (CORREGIDO)
                     elif self.modo_actual == "TRIPLE":
                         self.modo_actual = "BASE"
                         self.patron_color = None
@@ -982,7 +990,7 @@ class ProPredictor:
                         if self.on_prediction:
                             self.on_prediction(f"🔄 PRO: TRIPLE falló → Volviendo a BASE")
                     
-                    # Si estaba en ALTERNANCIA → Volver a BASE
+                    # Si estaba en ALTERNANCIA y PERDIMOS → Volver a BASE
                     elif self.modo_actual == "ALTERNANCIA":
                         self.modo_actual = "BASE"
                         self.alternancia_activa = False
@@ -990,20 +998,20 @@ class ProPredictor:
                         if self.on_prediction:
                             self.on_prediction(f"🔄 PRO: ALTERNANCIA rota → Volviendo a BASE")
             
-            # Limpiar apuesta pendiente
+            # ⭐ Limpiar apuesta pendiente (IGUAL QUE HACK)
             self.apuesta_pendiente = False
             self.prediccion_pendiente = None
             return  # ⭐ Salir para no procesar el mismo color dos veces
         
         # ============================================
-        # 2. AGREGAR COLOR AL HISTORIAL
+        # 2. AGREGAR COLOR AL HISTORIAL (IGUAL QUE HACK)
         # ============================================
         self.session_history.append(color)
         if len(self.session_history) > 20:
             self.session_history = self.session_history[-20:]
         
         # ============================================
-        # 3. DETECTAR PATRÓN Y GENERAR PREDICCIÓN
+        # 3. DETECTAR PATRÓN Y GENERAR PREDICCIÓN (IGUAL QUE HACK)
         # ============================================
         if len(self.session_history) < 2:
             return
@@ -1044,12 +1052,12 @@ class ProPredictor:
                 return
             patron_detectado = "BASE"
         
-        # Guardar predicción pendiente para la SIGUIENTE ronda
+        # ⭐ Guardar predicción pendiente (IGUAL QUE HACK)
         self.prediccion_pendiente = prediccion
         self.apuesta_pendiente = True
         self.last_prediction = prediccion
         
-        # Mostrar predicción (se ejecutará en la SIGUIENTE ronda)
+        # ⭐ Mostrar predicción (IGUAL QUE HACK)
         emoji = self._color_emoji(prediccion)
         
         if self.on_prediction:
@@ -1837,7 +1845,7 @@ class PredictionBot:
             f"🔄 Reinicio: ${restart_bet}\n"
             f"⏸️ Max Pausas: {max_pauses}\n"
             f"🎲 Gestión: {modo_texto}\n"
-            f"🎯 Take Profit: {tp_texto}\n"
+            f"🎯 Take Profit: ${tp_texto}\n"
             f"📊 Cuentas: {len(self.user_sessions[user_id]['accounts'])}\n\n"
             f"📌 Cuando alcanza Stop Loss → PAUSA\n"
             f"📌 Espera WIN para reiniciar\n"
@@ -2180,12 +2188,13 @@ class PredictionBot:
         print("  • Al llegar al límite → DETENCIÓN PERMANENTE")
         print("=" * 70)
         print("🏆 MODO PRO (CORREGIDO):")
+        print("  • USA EL MISMO MÉTODO DE OBTENCIÓN DE COLOR QUE HACK")
+        print("  • Apuesta en cada ronda (igual que HACK)")
         print("  • Siempre comienza en BASE (seguir color)")
         print("  • DOBLE: apuesta CONTRARIO, si WIN → BASE, si LOSS → TRIPLE")
         print("  • TRIPLE: apuesta CONTRARIO, SIEMPRE vuelve a BASE (WIN o LOSS)")
         print("  • ALTERNANCIA: se mantiene hasta que rompa, luego BASE")
         print("  • PRIORIDAD: TRIPLE > DOBLE > ALTERNANCIA > BASE")
-        print("  • FUNCIONA IGUAL QUE HACK (apuesta en siguiente ronda)")
         print("=" * 70)
         print("✅ SISTEMA DE APUESTA PENDIENTE IMPLEMENTADO EN TODOS LOS MODOS")
         print("   → Elimina errores intermitentes de WIN/LOSS")
